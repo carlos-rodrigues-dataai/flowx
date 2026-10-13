@@ -300,6 +300,8 @@ def activity_extra_fields(activity: Activity) -> dict[str, Any]:
         case AgenticComponentActivity():
             extra["files"] = activity.files
             extra["resources"] = activity.resources
+            if activity.environments:
+                extra["environments"] = activity.environments
             extra["task"] = activity.task
             if activity.raw_definition is not None:
                 extra["raw_definition"] = activity.raw_definition
@@ -583,6 +585,16 @@ def pipeline_to_debug_dict(pipeline: Pipeline) -> dict[str, Any]:
     }
 
 
+_PLACEHOLDER_OWNED_COMPONENT_FIELDS = (
+    "task_key",
+    "name",
+    "depends_on",
+    "timeout_seconds",
+    "max_retries",
+    "min_retry_interval_millis",
+)
+
+
 def _locate_task(tasks: list[dict[str, Any]], activity_name: str) -> tuple[list[dict[str, Any]], int] | None:
     """Find the first task named *activity_name*, recursing into containers.
 
@@ -607,21 +619,31 @@ def _locate_task(tasks: list[dict[str, Any]], activity_name: str) -> tuple[list[
     return None
 
 
-def _find_and_replace_task(tasks: list[dict[str, Any]], activity_name: str, replacement: dict[str, Any]) -> bool:
+def replace_task_by_name(tasks: list[dict[str, Any]], activity_name: str, replacement: dict[str, Any]) -> bool:
     """Replace the task named *activity_name* with *replacement*, recursing into containers.
 
     Preserves the placeholder's ``task_key`` and ``depends_on`` when the replacement omits them so
-    downstream dependency edges stay intact.  Returns True when a match was replaced.
+    downstream dependency edges stay intact.  An ``AgenticComponentActivity`` replacement instead
+    always takes its identity, dependencies, timeout, and retries from the placeholder, dropping any
+    value the agent set (or the placeholder lacks), because flowx owns those for an authored
+    component.  Returns True when a match was replaced.
     """
     found = _locate_task(tasks, activity_name)
     if found is None:
         return False
     container, index = found
     task = container[index]
-    replacement.setdefault("task_key", task.get("task_key"))
-    replacement.setdefault("name", activity_name)
-    if "depends_on" not in replacement and task.get("depends_on"):
-        replacement["depends_on"] = task["depends_on"]
+    if replacement.get("type") == "AgenticComponentActivity":
+        for field_name in _PLACEHOLDER_OWNED_COMPONENT_FIELDS:
+            if field_name in task:
+                replacement[field_name] = task[field_name]
+            else:
+                replacement.pop(field_name, None)
+    else:
+        replacement.setdefault("task_key", task.get("task_key"))
+        replacement.setdefault("name", activity_name)
+        if "depends_on" not in replacement and task.get("depends_on"):
+            replacement["depends_on"] = task["depends_on"]
     container[index] = replacement
     return True
 
@@ -640,19 +662,23 @@ def merge_agentic_results(report_path: Path, results_dir: Path, output_path: Pat
     The matching placeholder task (located by ``name``, recursing into
     IfCondition / ForEach / Switch containers) is replaced by ``task``.  Use a
     ``NotebookActivity`` whose ``notebook_path`` points at a notebook the agent
-    wrote to the workspace; the prepare phase then references it directly.
+    wrote to the workspace; the prepare phase then references it directly.  An
+    ``AgenticComponentActivity`` keeps the placeholder's name, task key,
+    dependencies, timeout, and retries whatever the agent wrote.
 
     This fills convert's own agentic gaps. A pipeline the routing record routes agentic is filled
-    only by ``fill-agentic combine``, so a result that names one, or an untargeted result that would
+    only by ``fill-agentic``, so a result that names one, or an untargeted result that would
     land in one, is refused and nothing is written. Results apply one by one in file-name order, and
     each is checked against the pipeline it actually lands in.
 
     When the report has a routing record and the merge is written in place into the live
-    ``<output_dir>/.work/translation_report.json``, every merge is applied to the same pipeline of
-    route's saved deterministic baseline too, so the next rebuild keeps it, and the record's
-    ``baseline_report_sha256`` is refreshed. A merge written anywhere else (``output_path``, or into
-    a copy such as modify's configured report) leaves the baseline alone. Nothing is written until
-    every result has been applied.
+    ``<output_dir>/.work/translation_report.json``, every merge is also stored as a gap fill in
+    ``metadata/agentic_conversion.json``, so every later rebuild applies it on top of route's saved
+    deterministic baseline, which is never changed. The report's routing record then carries the
+    hash of the gap fills applied, so package sees that modify's configured copy predates the merge.
+    A merge written anywhere else (``output_path``, or
+    into a copy such as modify's configured report) stores nothing. Nothing is written until every
+    result has been applied.
 
     Args:
         report_path: ``translation_report.json`` produced by the translate phase.
@@ -667,15 +693,15 @@ def merge_agentic_results(report_path: Path, results_dir: Path, output_path: Pat
         ValueError: A result would land in a pipeline the routing record routes agentic, or the
             routing baseline is missing or lacks the task a merge replaced.
     """
-    import hashlib
-
+    from flowx.discovery_serde import canonical_sha256
     from flowx.route_agentic import (
-        BASELINE_DIRNAME,
-        BASELINE_REPORT_FILENAME,
         REPORT_FILENAME,
         ROUTED_AGENTIC_MERGE_REFUSED,
         WORK_DIRNAME,
+        applied_gap_fills,
+        load_agentic_output,
         load_baseline,
+        record_gap_fills,
         routed_agentic_pipelines,
         routing_record,
     )
@@ -690,8 +716,8 @@ def merge_agentic_results(report_path: Path, results_dir: Path, output_path: Pat
     updates_baseline = (
         record is not None and destination.resolve() == report_path.resolve() == live_report_path.resolve()
     )
-    baseline_report: Any = None
     baseline_by_name: dict[Any, dict[str, Any]] = {}
+    gap_fills: list[dict[str, Any]] = []
     if updates_baseline:
         baseline_report = load_baseline(output_dir, fresh=False)[0]
         baseline_pipelines = baseline_report["pipelines"] if "pipelines" in baseline_report else [baseline_report]
@@ -724,23 +750,25 @@ def merge_agentic_results(report_path: Path, results_dir: Path, output_path: Pat
             logger.warning("No placeholder named '%s' found for %s", activity_name, result_file.name)
             unmatched += 1
             continue
-        _find_and_replace_task(target["tasks"], activity_name, dict(task))
+        replace_task_by_name(target["tasks"], activity_name, dict(task))
         if updates_baseline:
             baseline_pipeline = baseline_by_name.get(target.get("name"))
-            if baseline_pipeline is None or not _find_and_replace_task(
+            if baseline_pipeline is None or not replace_task_by_name(
                 baseline_pipeline.get("tasks", []), activity_name, dict(task)
             ):
                 raise ValueError(
                     f"the routing baseline has no task {activity_name!r} in pipeline {target.get('name')!r}; "
                     "re-run route, then merge again"
                 )
+            gap_fills.append({"pipeline": str(target.get("name")), "activity_name": activity_name, "task": task})
         merged += 1
         logger.info("Merged agentic result for '%s' from %s", activity_name, result_file.name)
 
-    if record is not None and updates_baseline and merged:
-        baseline_bytes = json.dumps(baseline_report, indent=2, default=str).encode("utf-8")
-        (output_dir / WORK_DIRNAME / BASELINE_DIRNAME / BASELINE_REPORT_FILENAME).write_bytes(baseline_bytes)
-        record["baseline_report_sha256"] = hashlib.sha256(baseline_bytes).hexdigest()
+    if record is not None and gap_fills:
+        baseline_report_sha256 = str(record.get("baseline_report_sha256"))
+        record_gap_fills(output_dir, gap_fills, baseline_report_sha256)
+        stored_fills = load_agentic_output(output_dir).gap_fills
+        record["gap_fills_sha256"] = canonical_sha256(applied_gap_fills(stored_fills, baseline_report_sha256))
     destination.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
     logger.info("Wrote merged report to %s (%d merged, %d unmatched)", destination, merged, unmatched)
     return merged, unmatched

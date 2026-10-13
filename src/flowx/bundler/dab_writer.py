@@ -24,7 +24,7 @@ from flowx.bundler.constants import (
     SINGLE_NODE_JOB_CLUSTER_KEY,
 )
 from flowx.bundler.inner_job_params import normalize_value
-from flowx.bundler.notebook_writer import write_notebooks
+from flowx.bundler.notebook_writer import content_signature, write_notebooks
 from flowx.bundler.prereqs_writer import ManualParameter, build_prereqs, render_setup_md
 from flowx.bundler.setup_generator import generate_setup_tasks
 from flowx.ir_serde import data_asset_from_dict, lineage_from_dict
@@ -114,6 +114,7 @@ def write_bundle(
     _cross_bundle_variables.clear()
     _neutralized_conditions.clear()
 
+    _check_agentic_file_collisions(workflow, catalog, schema)
     workflow = copy.deepcopy(workflow)
 
     output_dir = Path(output_dir)
@@ -136,6 +137,8 @@ def write_bundle(
 
     pipeline_resources = _collect_pipeline_resources(workflow)
     _check_pipeline_resource_keys(pipeline_resources, known_bundle_jobs)
+    environments = _collect_environments(workflow)
+    _check_environment_keys(environments, workflow)
     pipeline_variable_declarations = _build_pipeline_variable_declarations(pipeline_resources, catalog, schema)
     # sql_task references ${var.warehouse_id}; declare it (no default -> user supplies at deploy).
     if _bundle_uses_sql_task(workflow):
@@ -186,7 +189,9 @@ def write_bundle(
     resources_dir.mkdir(parents=True, exist_ok=True)
     job_yml_path = resources_dir / f"{resource_key}.yml"
     hoisted_global_names = set(hoisted_global_variables)
-    job_resource = _build_job_resource(workflow, resource_key, hoisted_globals=hoisted_global_names)
+    job_resource = _build_job_resource(
+        workflow, resource_key, hoisted_globals=hoisted_global_names, environments=environments
+    )
     job_yml_path.write_text(
         yaml.dump(
             job_resource, default_flow_style=False, sort_keys=False, allow_unicode=True, Dumper=_BundleYamlDumper
@@ -201,7 +206,11 @@ def write_bundle(
         inner_key = normalize_task_key(inner.name)
         inner_yml_path = resources_dir / f"{inner_key}.yml"
         inner_resource = _build_job_resource(
-            inner, inner_key, extra_notebooks_for_augment=workflow.notebooks, hoisted_globals=hoisted_global_names
+            inner,
+            inner_key,
+            extra_notebooks_for_augment=workflow.notebooks,
+            hoisted_globals=hoisted_global_names,
+            environments=environments,
         )
         inner_yml_path.write_text(
             yaml.dump(
@@ -379,51 +388,50 @@ def _default_report_path(output_dir: Path) -> Path:
 def _routing_plan_failures(output_dir: Path, report_path: Path) -> list[str]:
     """Check a recorded routing plan still matches what is about to be packaged.
 
-    A plan is bound to the inventory, the saved source graphs and the saved source insights it was
-    decided on. If discover or enrich ran again since route, package refuses rather than shipping a
-    report that no longer reflects the user's decision. It also refuses when the report's routing
-    record disagrees with the plan: a different plan hash, different components, members or
-    decisions, or no record although the plan routes a component agentic.
+    Whenever enrich ran, ``agentic_insights.json`` must still agree with the inventory's ``insights``
+    block, plan or no plan. A report that carries a routing record needs its plan: package refuses
+    one whose ``conversion_plan.json`` is missing. A plan is bound to the inventory, the saved source
+    graphs and the saved agentic insights it was decided on, and must still decide every component
+    once with nothing pending; if discover or enrich ran again since route, package refuses rather
+    than shipping a report that no longer reflects the user's decision. It also refuses when the
+    report's routing record disagrees with the plan, and while any agentic unit has no agent output
+    yet: an agentic decision is packaged agentically, never as the deterministic stand-in.
 
-    The live ``.work/translation_report.json`` is the report route, combine and merge keep in step
+    The live ``.work/translation_report.json`` is the report route, the fill and merge keep in step
     with the saved deterministic baseline, so it is always the one replayed (see
     :func:`_live_report_failures`; its remedy is "re-run route"). Any other packaged report -- modify's
     configured copy, or one written with ``modify --out`` -- can't be replayed, because modify changes
     its pipelines, so its routing record must equal the live one; otherwise package refuses with "the
     configured report is out of date; re-run modify".
 
-    Returns one message per problem; an empty list means there is no recorded plan or it still matches.
+    Returns one message per problem; an empty list means there is no routing to check or it still matches.
     """
     from flowx.models.conversion_plan import ConversionPlan
     from flowx.route_agentic import REPORT_FILENAME, WORK_DIRNAME, routing_record
-    from flowx.routing import plan_binding_violations
+    from flowx.routing import insights_file_violations, plan_binding_violations, recorded_plan_violations
 
     metadata_dir = Path(output_dir) / "metadata"
+    inventory_path = metadata_dir / "inventory.json"
+    inventory: Any = None
+    if inventory_path.is_file():
+        try:
+            inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            return [f"metadata/inventory.json is unreadable: {error}"]
+    insights_failures = insights_file_violations(Path(output_dir), inventory if isinstance(inventory, dict) else None)
+    if insights_failures:
+        return insights_failures
+
     try:
         plan = ConversionPlan.load(Path(output_dir))
     except (OSError, ValueError) as error:
         return [f"metadata/conversion_plan.json is unreadable: {error}"]
-    if plan is None:
-        return []
 
-    inventory_path = metadata_dir / "inventory.json"
-    if not inventory_path.is_file():
-        return ["metadata/conversion_plan.json was recorded but metadata/inventory.json is missing"]
-    try:
-        inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        return [f"metadata/inventory.json is unreadable: {error}"]
-    if not isinstance(inventory, dict):
-        return ["metadata/inventory.json must contain a JSON object"]
-
-    stale = plan_binding_violations(plan, inventory)
-    if stale:
-        return [f"metadata/{message}" if message.startswith("conversion_plan.json") else message for message in stale]
-
+    report: Any = None
     try:
         report = json.loads(Path(report_path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return []
+        report = None
     live_path = Path(output_dir) / WORK_DIRNAME / REPORT_FILENAME
     configured = Path(report_path).resolve() != live_path.resolve()
     live_report = report
@@ -432,7 +440,37 @@ def _routing_plan_failures(output_dir: Path, report_path: Path) -> list[str]:
             live_report = json.loads(live_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             live_report = {}
-    failures = _live_report_failures(Path(output_dir), plan.to_dict(), live_report)
+
+    if plan is None:
+        if routing_record(report) is not None or routing_record(live_report) is not None:
+            return [
+                f"{REPORT_FILENAME} was routed (it carries a routing record) but metadata/conversion_plan.json "
+                "is missing; restore the plan, or re-run convert to package without routing"
+            ]
+        return []
+
+    if inventory is None:
+        return ["metadata/conversion_plan.json was recorded but metadata/inventory.json is missing"]
+    if not isinstance(inventory, dict):
+        return ["metadata/inventory.json must contain a JSON object"]
+
+    stale = plan_binding_violations(plan, inventory)
+    if stale:
+        return [f"metadata/{message}" if message.startswith("conversion_plan.json") else message for message in stale]
+    invalid = recorded_plan_violations(plan, inventory)
+    if invalid:
+        return [
+            f"metadata/conversion_plan.json is not a valid decision: {violation}; re-run route" for violation in invalid
+        ]
+    pending = plan.pending_components()
+    if pending:
+        return [
+            f"components {pending} have no decision yet; decide them in metadata/conversion_plan.json and re-run route"
+        ]
+
+    if report is None:
+        return []
+    failures = _live_report_failures(Path(output_dir), plan.to_dict(), live_report, inventory)
     if failures:
         return failures
     if configured and routing_record(report) != routing_record(live_report):
@@ -440,22 +478,29 @@ def _routing_plan_failures(output_dir: Path, report_path: Path) -> list[str]:
     return []
 
 
-def _live_report_failures(output_dir: Path, plan_document: dict[str, Any], report: Any) -> list[str]:
+def _live_report_failures(
+    output_dir: Path, plan_document: dict[str, Any], report: Any, inventory: dict[str, Any]
+) -> list[str]:
     """Check the live translation report still equals a fresh replay of the rebuild.
 
     The report's routing record must match the plan, the saved deterministic baseline must still have
-    the hashes the record names, and no stored combine may have been edited. The rebuild from the
-    baseline, the plan and the stored combines must then reproduce the report exactly, record included.
-    A report without a record passes only when the plan routes nothing agentic.
+    the hashes the record names and the inventory's pipelines, and no stored agent output or gap fill
+    may have been edited. The rebuild from the baseline, the stored gap fills, the plan and the stored
+    outputs must then reproduce the report exactly, record included. Finally every agentic unit must
+    have its agent output applied. A report without a record passes only when the plan routes nothing
+    agentic.
     """
     from flowx.discovery_serde import canonical_sha256
     from flowx.models.conversion_plan import DECISION_AGENTIC
     from flowx.route_agentic import (
-        COMBINES_FILENAME,
+        AGENTIC_OUTPUT_FILENAME,
+        OUTCOME_AGENTIC_NOT_VIABLE,
         REPORT_FILENAME,
         ROUTING_RECORD_KEY,
+        agentic_pipeline_names,
+        baseline_pipeline_mismatch,
+        load_agentic_output,
         load_baseline,
-        load_combines,
         rebuild,
         routing_record,
         routing_record_mismatches,
@@ -485,28 +530,39 @@ def _live_report_failures(output_dir: Path, plan_document: dict[str, Any], repor
     actual_hashes = (hashlib.sha256(baseline_report_bytes).hexdigest(), hashlib.sha256(baseline_gaps_bytes).hexdigest())
     if recorded_hashes != actual_hashes:
         return ["the deterministic baseline is missing or changed; re-run convert, then route"]
+    mismatch = baseline_pipeline_mismatch(baseline_report, inventory)
+    if mismatch and agentic_pipeline_names(plan_document):
+        return [mismatch]
 
     try:
-        stored, combines = load_combines(output_dir)
+        stored = load_agentic_output(output_dir)
     except (OSError, ValueError) as error:
-        return [f"metadata/{COMBINES_FILENAME} is unreadable: {error}"]
-    edited = sorted(set(stored) - set(combines))
-    if edited:
-        return [f"the combine store has been edited ({', '.join(edited)}); re-run fill-agentic combine"]
+        return [f"metadata/{AGENTIC_OUTPUT_FILENAME} is unreadable: {error}"]
+    if stored.edited:
+        return [
+            f"metadata/{AGENTIC_OUTPUT_FILENAME} has been edited ({', '.join(stored.edited)}); "
+            "re-run fill-agentic for that component, or merge that gap again"
+        ]
 
     rebuilt_report, _, rebuilt_record = rebuild(
         baseline_report,
         baseline_gaps,
         plan_document,
-        combines,
-        record,
+        stored.outputs,
+        stored.gap_fills,
         baseline_report_bytes,
         baseline_gaps_bytes,
     )
     report_without_record = {key: value for key, value in report.items() if key != ROUTING_RECORD_KEY}
     if rebuilt_record != record or report_without_record != rebuilt_report:
         return [f"{REPORT_FILENAME} does not match a fresh rebuild; re-run route"]
-    return []
+
+    return [
+        f"component {unit_id!r} ({', '.join(entry.get('members') or [])}) is routed agentic but has no agent "
+        "output yet; fill it with fill-agentic, or decide it deterministic and re-run route"
+        for unit_id, entry in record["components"].items()
+        if entry.get("outcome") == OUTCOME_AGENTIC_NOT_VIABLE
+    ]
 
 
 def _file_sha256(path: Path) -> str | None:
@@ -518,27 +574,28 @@ def _file_sha256(path: Path) -> str | None:
 
 
 def _write_route_audit(output_dir: Path, report_path: Path | None = None) -> Path | None:
-    """Persist a compact routing/gaps audit to ``metadata/route_audit.json`` before the prune.
+    """Persist a compact routing audit to ``metadata/route_audit.json`` before the prune.
 
     Package prunes the transient ``.work/`` folder (translation report + ``gaps.json``) by default,
     which erases the "what did routing change?" trail. When a routing decision was recorded
-    (``metadata/conversion_plan.json`` exists), summarise the routed components -- their decisions,
-    and from the report's routing record their outcomes, fingerprints, applied combine hashes and
-    replacements -- and the gaps routing introduced in agentic-routed pipelines, into an additive
-    ``metadata/`` artifact that survives the prune. It also records hashes of the inventory, the saved
-    source graphs and source insights the plan was bound to, the plan, and the packaged report, plus
-    the baseline report and gaps route started from as the routing record names them, so the trail
-    can be checked against those files later.
+    (``metadata/conversion_plan.json`` exists), summarise each routing unit -- its decision, and from
+    the report's routing record its outcome, fingerprint and applied output hash, plus the history of
+    outputs it replaced from ``metadata/agentic_conversion.json`` -- and the gap fills applied, into an
+    additive ``metadata/`` artifact that survives the prune. It also records the routing conversation,
+    the hashes of the inventory, the saved source graphs and agentic insights the plan was bound to,
+    the plan (the same canonical hash the routing record holds), and the packaged report, plus the
+    baseline report and gaps route started from as the routing record names them, so the trail can be
+    checked against those files later.
 
     Returns the written path, or ``None`` when there is no recorded plan (no routing happened) -- so
     the no-route path writes nothing and stays byte-identical.
     """
     from flowx.discovery_insights import inventory_fingerprint
-    from flowx.models.conversion_plan import DECISION_AGENTIC, DECISION_DETERMINISTIC, PLAN_FILENAME, ConversionPlan
-    from flowx.route_agentic import OUTCOME_DETERMINISTIC, routing_record
+    from flowx.discovery_serde import canonical_sha256
+    from flowx.models.conversion_plan import DECISION_AGENTIC, DECISION_DETERMINISTIC, ConversionPlan
+    from flowx.route_agentic import OUTCOME_DETERMINISTIC, load_agentic_output, routing_record, routing_units
 
     metadata_dir = Path(output_dir) / "metadata"
-    plan_path = metadata_dir / PLAN_FILENAME
     try:
         plan = ConversionPlan.load(Path(output_dir))
     except (OSError, ValueError):
@@ -560,63 +617,59 @@ def _write_route_audit(output_dir: Path, report_path: Path | None = None) -> Pat
             record = routing_record(json.loads(Path(report_path).read_text(encoding="utf-8")))
         except (OSError, json.JSONDecodeError):
             record = None
-    recorded_components = record.get("components") if record is not None else None
-    if not isinstance(recorded_components, dict):
-        recorded_components = {}
+    recorded_units = record.get("components") if record is not None else None
+    if not isinstance(recorded_units, dict):
+        recorded_units = {}
+    try:
+        stored = load_agentic_output(Path(output_dir))
+    except ValueError:
+        stored = None
+    stored_entries = stored.document.get("components", {}) if stored is not None else {}
 
-    components: list[dict[str, Any]] = []
+    plan_document = plan.to_dict()
+    units: list[dict[str, Any]] = []
     agentic_pipelines: set[str] = set()
-    for component in plan.components:
-        recorded = recorded_components.get(component.component_id)
-        component_entry: dict[str, Any] = {
-            "component_id": component.component_id,
-            "members": list(component.members),
-            "decision": component.decision,
-        }
+    for unit_id, unit in routing_units(plan_document).items():
+        recorded = recorded_units.get(unit_id)
+        unit_entry: dict[str, Any] = {"component_id": unit_id, "members": list(unit["members"])}
+        if unit.get("components"):
+            unit_entry["grouped_components"] = list(unit["components"])
+        unit_entry["decision"] = unit["decision"]
         if isinstance(recorded, dict):
-            component_entry["outcome"] = recorded.get("outcome")
-            component_entry["combine_sha256"] = recorded.get("combine_sha256")
-            component_entry["fingerprint"] = recorded.get("fingerprint")
-            if recorded.get("replacements"):
-                component_entry["replacements"] = recorded.get("replacements")
+            unit_entry["outcome"] = recorded.get("outcome")
+            unit_entry["output_sha256"] = recorded.get("output_sha256")
+            unit_entry["fingerprint"] = recorded.get("fingerprint")
         else:
-            component_entry["outcome"] = OUTCOME_DETERMINISTIC if component.decision == DECISION_DETERMINISTIC else None
-            component_entry["combine_sha256"] = None
-        components.append(component_entry)
-        if component.decision == DECISION_AGENTIC:
-            agentic_pipelines.update(component.members)
+            unit_entry["outcome"] = OUTCOME_DETERMINISTIC if unit["decision"] == DECISION_DETERMINISTIC else None
+            unit_entry["output_sha256"] = None
+        stored_entry = stored_entries.get(unit_id)
+        if isinstance(stored_entry, dict) and stored_entry.get("replaced"):
+            unit_entry["replaced"] = stored_entry["replaced"]
+        units.append(unit_entry)
+        if unit["decision"] == DECISION_AGENTIC:
+            agentic_pipelines.update(unit["members"])
 
-    gaps_introduced: list[dict[str, Any]] = []
-    gaps_path = Path(output_dir) / ".work" / "gaps.json"
-    if gaps_path.is_file():
-        try:
-            gaps = json.loads(gaps_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            gaps = []
-        for gap in gaps if isinstance(gaps, list) else []:
-            if isinstance(gap, dict) and gap.get("pipeline") in agentic_pipelines:
-                gaps_introduced.append(
-                    {
-                        "pipeline": gap.get("pipeline"),
-                        "activity_name": gap.get("activity_name"),
-                        "activity_type": gap.get("activity_type"),
-                    }
-                )
+    baseline_report_sha256 = record.get("baseline_report_sha256") if record is not None else None
+    gap_fills = [
+        {"pipeline": fill["pipeline"], "activity_name": fill["activity_name"], "task_sha256": fill["task_sha256"]}
+        for fill in (stored.gap_fills if stored is not None else [])
+        if baseline_report_sha256 is not None and fill["baseline_report_sha256"] == baseline_report_sha256
+    ]
 
     audit = {
-        "schema": "flowx.route_audit/v1",
+        "schema": "flowx.route_audit/v2",
         "recorded_against_inventory_sha256": plan.inventory_sha256,
         "inventory_sha256": inventory_sha256,
         "source_graphs_sha256": plan.source_graphs_sha256,
-        "source_insights_sha256": plan.source_insights_sha256,
-        "conversion_plan_sha256": _file_sha256(plan_path),
-        "baseline_report_sha256": record.get("baseline_report_sha256") if record is not None else None,
+        "agentic_insights_sha256": plan.agentic_insights_sha256,
+        "conversion_plan_sha256": canonical_sha256(plan_document),
+        "baseline_report_sha256": baseline_report_sha256,
         "baseline_gaps_sha256": record.get("baseline_gaps_sha256") if record is not None else None,
         "translation_report_sha256": _file_sha256(report_path) if report_path is not None else None,
-        "components": components,
+        "components": units,
         "agentic_pipelines": sorted(agentic_pipelines),
-        "gaps_count": len(gaps_introduced),
-        "gaps_introduced": gaps_introduced,
+        "gap_fills": gap_fills,
+        "conversation": [entry.to_dict() for entry in plan.conversation],
     }
     metadata_dir.mkdir(parents=True, exist_ok=True)
     audit_path = metadata_dir / "route_audit.json"
@@ -916,10 +969,40 @@ def _known_bundle_job_keys(workflow: PreparedWorkflow, resource_key: str) -> set
     return keys
 
 
+def _check_agentic_file_collisions(workflow: PreparedWorkflow, catalog: str, schema: str) -> None:
+    """Refuse an agent-authored file whose path another file below ``src`` uses with different content.
+
+    The notebook writer gives a clashing file a ``__N`` suffix, and setup notebooks are written later and
+    replace whatever is there, but every task still points at the original path, so one task would run the
+    other file's code.
+    """
+    authored_paths: set[str] = set()
+    signatures_by_path: dict[str, set[object]] = {}
+    for prepared in [workflow, *workflow.inner_workflows]:
+        setup_notebooks = generate_setup_tasks(
+            secrets=prepared.secrets, setup_tasks=prepared.setup_tasks, catalog=catalog, schema=schema
+        )
+        for notebook in [*prepared.notebooks, *setup_notebooks]:
+            if notebook.authored:
+                authored_paths.add(notebook.relative_path)
+            elif _is_bundle_root_artifact(notebook):
+                continue
+            signatures_by_path.setdefault(notebook.relative_path, set()).add(content_signature(notebook))
+    for relative_path in sorted(authored_paths):
+        if len(signatures_by_path[relative_path]) > 1:
+            raise ValueError(
+                f"Agentic component file {relative_path!r} shares its path with another file in the bundle that "
+                "has different content; give each component its own file path"
+            )
+
+
 def _is_bundle_root_artifact(notebook: DabNotebook) -> bool:
-    """Return whether a generated file belongs at the bundle root instead of below ``src``."""
-    if notebook.write_to_bundle_root is not None:
-        return notebook.write_to_bundle_root
+    """Return whether a generated file belongs at the bundle root instead of below ``src``.
+
+    Authored files always stay below ``src``, even when their path looks like a PyDABs artifact.
+    """
+    if notebook.authored:
+        return False
     return notebook.relative_path.startswith("resources/") or notebook.relative_path == "pyproject.toml"
 
 
@@ -1316,11 +1399,20 @@ def _collect_pipeline_resources(workflow: PreparedWorkflow) -> list[dict[str, An
 
     Returns:
         Flat list of pipeline-resource dicts (each with ``resource_key``
-        and ``definition``), including entries from inner workflows.
+        and ``definition``), including entries from inner workflows. A
+        resource declared more than once with the same key and definition
+        appears once, so it is written once; other fields on the entry are
+        never written and play no part in that comparison.
     """
-    resources = list(workflow.pipeline_resources)
-    for inner in workflow.inner_workflows:
-        resources.extend(inner.pipeline_resources)
+    resources: list[dict[str, Any]] = []
+    for current in [workflow, *workflow.inner_workflows]:
+        for resource in current.pipeline_resources:
+            if not any(
+                existing["resource_key"] == resource["resource_key"]
+                and existing["definition"] == resource["definition"]
+                for existing in resources
+            ):
+                resources.append(resource)
     return resources
 
 
@@ -1330,7 +1422,9 @@ def _check_pipeline_resource_keys(pipeline_resources: list[dict[str, Any]], job_
     Every pipeline resource is written to ``resources/<key>.yml``, as is every static job, so a
     pipeline key that matches a job key or an earlier pipeline key would silently replace that file
     and drop the other resource. Bundle resource keys must also be unique across resource types, so
-    a match with a Python-generated dbt-factory job would fail at deploy time instead.
+    a match with a Python-generated dbt-factory job would fail at deploy time instead. Repeats with
+    the same definition are already collapsed by :func:`_collect_pipeline_resources`, so a repeated
+    key here always carries a different definition.
 
     Raises:
         ValueError: A pipeline resource key matches a job resource key or repeats an earlier one.
@@ -1345,10 +1439,55 @@ def _check_pipeline_resource_keys(pipeline_resources: list[dict[str, Any]], job_
             )
         if pipeline_key in seen_pipeline_keys:
             raise ValueError(
-                f"Pipeline resource key {pipeline_key!r} is used by more than one pipeline resource; "
-                f"each would overwrite resources/{pipeline_key}.yml"
+                f"Pipeline resource key {pipeline_key!r} is used by more than one pipeline resource with "
+                f"different definitions; each would overwrite resources/{pipeline_key}.yml"
             )
         seen_pipeline_keys.add(pipeline_key)
+
+
+def _collect_environments(workflow: PreparedWorkflow) -> list[dict[str, Any]]:
+    """Returns every job environment carried by *workflow* and its inner jobs.
+
+    Each entry is an ``{environment_key, spec}`` dict. An environment declared
+    more than once with the same key and spec appears once, so it is written
+    once per job that uses it.
+    """
+    environments: list[dict[str, Any]] = []
+    for current in [workflow, *workflow.inner_workflows]:
+        for environment in current.environments:
+            if environment not in environments:
+                environments.append(environment)
+    return environments
+
+
+def _check_environment_keys(environments: list[dict[str, Any]], workflow: PreparedWorkflow) -> None:
+    """Fail when an environment key is declared with two specs or a task names an undeclared one.
+
+    Each job lists the environments its tasks reference, so two specs under one key would leave a
+    task's compute ambiguous, and a task whose ``environment_key`` matches no declared environment is
+    rejected by the Jobs API at deploy time. Identical repeats are already collapsed by
+    :func:`_collect_environments`, so a repeated key here always carries a different spec.
+
+    Raises:
+        ValueError: An environment key repeats with a different spec, or a task references an
+            environment key no environment declares.
+    """
+    declared_keys: set[str] = set()
+    for environment in environments:
+        environment_key = environment["environment_key"]
+        if environment_key in declared_keys:
+            raise ValueError(
+                f"Job environment {environment_key!r} is declared more than once with different specs; "
+                "give each spec its own environment_key"
+            )
+        declared_keys.add(environment_key)
+    for current in [workflow, *workflow.inner_workflows]:
+        for task in _iter_tasks_recursively(current.tasks):
+            if "environment_key" in task and task["environment_key"] not in declared_keys:
+                raise ValueError(
+                    f"Task {task.get('task_key')!r} uses environment_key {task['environment_key']!r}, which no "
+                    "agentic component declares in its environments"
+                )
 
 
 def _collect_pydabs_resource_entries(workflow: PreparedWorkflow) -> list[str]:
@@ -1481,14 +1620,15 @@ def _collect_required_cluster_keys(tasks: list[dict[str, Any]]) -> set[str]:
     return {task["job_cluster_key"] for task in _iter_tasks_recursively(tasks) if task.get("job_cluster_key")}
 
 
-def _strip_compute_mode_markers(tasks: list[dict[str, Any]]) -> None:
-    """Removes the private ``_compute_mode`` marker from every task before YAML output.
+def _strip_private_task_markers(tasks: list[dict[str, Any]]) -> None:
+    """Removes the private ``_compute_mode`` and ``_authored`` markers from every task before YAML output.
 
     Args:
         tasks: Top-level task dicts (mutated in place).
     """
     for task in _iter_tasks_recursively(tasks):
         task.pop("_compute_mode", None)
+        task.pop("_authored", None)
 
 
 # Patterns that signal a base_parameter value couldn't be evaluated cleanly. When a task references an
@@ -1518,10 +1658,13 @@ def _extract_manual_parameters_from_existing_notebook_tasks(
     deterministic translation are emitted with raw ADF expression values
     that ``dbutils.widgets.get`` returns verbatim, which fails at runtime.
     Walking both the absolute-path and bundle-relative cases drops the
-    broken values and surfaces them as a SETUP.md row instead.
+    broken values and surfaces them as a SETUP.md row instead. Agent-authored
+    tasks (marked ``_authored``) are skipped: their parameters are written as given.
     """
     manual_parameters: list[ManualParameter] = []
     for task in _iter_tasks_recursively(tasks):
+        if task.get("_authored"):
+            continue
         notebook_task = task.get("notebook_task") or {}
         notebook_path = notebook_task.get("notebook_path", "")
         base_params = notebook_task.get("base_parameters")
@@ -1557,7 +1700,7 @@ def _iter_tasks_recursively(tasks: list[dict[str, Any]]) -> Iterator[dict[str, A
             yield from _iter_tasks_recursively([inner])
 
 
-_CLUSTER_BINDING_KEYS = ("existing_cluster_id", "new_cluster", "job_cluster_key")
+_COMPUTE_BINDING_KEYS = ("existing_cluster_id", "new_cluster", "job_cluster_key", "environment_key")
 
 
 def _any_task_uses_classic_cluster(tasks: list[dict[str, Any]]) -> bool:
@@ -1580,6 +1723,8 @@ def _bind_cluster_to_notebook_tasks(tasks: list[dict[str, Any]]) -> None:
     matching job_cluster.  Tasks without a marker fall back to the
     legacy behaviour: existing-workspace notebooks bind to
     ``default_cluster`` and flowx-generated notebooks stay unbound.
+    A task that already names its compute (a cluster or a serverless
+    ``environment_key``) is never given a second binding.
 
     Args:
         tasks: Top-level task dicts (mutated in place).
@@ -1588,7 +1733,7 @@ def _bind_cluster_to_notebook_tasks(tasks: list[dict[str, Any]]) -> None:
         notebook_task = task.get("notebook_task")
         if notebook_task is None:
             continue
-        if any(key in task for key in _CLUSTER_BINDING_KEYS):
+        if any(key in task for key in _COMPUTE_BINDING_KEYS):
             continue
         compute_mode = task.get("_compute_mode")
         if compute_mode == "serverless":
@@ -1857,14 +2002,16 @@ def _augment_base_parameters(
 
     Args:
         tasks: Top-level task dicts (mutated in place).
-        notebooks: Generated notebooks to scan.
+        notebooks: Generated notebooks to scan. Authored files are skipped so
+            their tasks keep exactly the parameters the agent wrote and the
+            notebook's own widget defaults still apply.
         hoisted_globals: Names of factory globals hoisted to bundle variables.
             A widget matching one of these binds to ``${var.NAME}`` so the
             deploy-time bundle variable flows into the notebook; other widgets
             default to an empty string as before.
     """
     hoisted = hoisted_globals or set()
-    notebook_by_relpath = {notebook.relative_path: notebook for notebook in notebooks}
+    notebook_by_relpath = {notebook.relative_path: notebook for notebook in notebooks if not notebook.authored}
 
     def visit(task: dict[str, Any]) -> None:
         notebook_task = task.get("notebook_task")
@@ -1893,6 +2040,7 @@ def _build_job_resource(
     attach_clusters: bool = True,
     extra_notebooks_for_augment: list[DabNotebook] | None = None,
     hoisted_globals: set[str] | None = None,
+    environments: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Builds a job resource dict for a single workflow.
 
@@ -1903,6 +2051,9 @@ def _build_job_resource(
             and binds every notebook task to it.  Set to ``False`` for inner
             jobs that are invoked via ``run_job_task`` from another bundle
             job — they inherit compute from the caller.
+        environments: The bundle's job environments; the ones this job's
+            tasks reference by ``environment_key`` are written as its
+            ``environments`` block.
 
     Returns:
         Dict ready for YAML serialization.
@@ -1944,7 +2095,18 @@ def _build_job_resource(
                 extras=cluster_extras or None,
             )
 
-    _strip_compute_mode_markers(workflow.tasks)
+    referenced_environment_keys = {
+        task["environment_key"] for task in _iter_tasks_recursively(workflow.tasks) if "environment_key" in task
+    }
+    job_environments = [
+        environment
+        for environment in environments or []
+        if environment["environment_key"] in referenced_environment_keys
+    ]
+    if job_environments:
+        job_def["environments"] = job_environments
+
+    _strip_private_task_markers(workflow.tasks)
 
     if workflow.parameters:
         # Emit each job parameter once in the DAB shape ({name, default}); dropping the internal ``type``
@@ -2575,6 +2737,7 @@ def _reconstruct_ir(task_ir: dict[str, Any]) -> Activity:
             **base,
             files=list(task_ir.get("files") or []),
             resources=list(task_ir.get("resources") or []),
+            environments=list(task_ir.get("environments") or []),
             task=dict(task_ir.get("task") or {}),
             raw_definition=task_ir.get("raw_definition"),
         )

@@ -19,7 +19,7 @@ All three phases share one `output_dir` (default `./flowx_output`):
 
 | Phase         | Module                  | Reads                  | Writes                                                                                   |
 |---------------|-------------------------|------------------------|------------------------------------------------------------------------------------------|
-| **profile**   | `parser/adf_loader.py`  | ADF JSON exports       | `metadata/source_graphs.json`, `metadata/inventory.json`, `metadata/profile_report.csv`, `metadata/<pipeline>.arm.json` |
+| **profile**   | `parser/adf_loader.py`  | ADF JSON exports       | `metadata/inventory.json`, `metadata/profile_report.csv`, `metadata/<pipeline>.arm.json` |
 | **translate** | `translator/engine.py`  | inventory + ADF source | `.work/translation_report.json` (transient IR)                                           |
 | **prepare**   | `bundler/dab_writer.py` | translation report     | `databricks.yml`, `resources/`, `src/`, `setup/` (and prunes `.work/`)                   |
 
@@ -41,7 +41,7 @@ The reporting layer (`reporting/`) can write per-run coverage to a Unity Catalog
                                   │ subprocess (same contract)
                     ┌─────────────────────────────┐
    MCP tool  ──────▶│  flowx.mcp (FastMCP)     │
-   (Claude / Genie) │  1 tool, 12 commands →       │
+   (Claude / Genie) │  1 tool, all commands →      │
                     │  adapter bridge              │
                     └─────────────────────────────┘
 ```
@@ -59,7 +59,7 @@ The unified `flowx.adapter` CLI is the single contract. Both surfaces go through
 | `mcp/runner.py`   | Subprocess bridge to `flowx.adapter` with artifact summarizers (for running translation without the `mcp` dependency) |
 | `mcp/__main__.py` | `python -m flowx.mcp` entry point (stdio default, `--http` for hosting)                                               |
 
-The `flowx` tool's `command` selects the adapter operation, with `parameters` carrying that command's arguments; the [app README](https://github.com/databricks-solutions/flowx/tree/main/app#tool) lists every command.
+The `flowx` tool's `command` selects the adapter operation, with `parameters` carrying that command's arguments; the command table in `app/README.md` lists every command and the adapter call it wraps.
 
 ## Deployment topology
 

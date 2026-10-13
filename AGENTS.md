@@ -56,7 +56,7 @@ All three phases write into one shared `<output_dir>` (default `./flowx_output`)
 the DAB bundle at the top level, kept artifacts under `metadata/`, and transient
 intermediates under `.work/` (pruned by `package`).
 
-1. **Discover** -- Parse ADF JSON from UC volumes -> typed AST -> `SourceGraph` -> `metadata/source_graphs.json` (versioned, hashed, motifs inside) -> `metadata/inventory.json` (built from the saved graphs, records their hash) + `metadata/profile_report.csv` + verbatim `metadata/<pipeline>.arm.json`; optional enrich adds `metadata/source_insights.json` and rebuilds the inventory with it
+1. **Discover** -- Parse ADF JSON from UC volumes -> typed AST -> `metadata/source_graphs.json` (hashed) -> `metadata/inventory.json` + `metadata/profile_report.csv` + verbatim `metadata/<pipeline>.arm.json`
 2. **Convert** -- Registry dispatch + topological sort -> Pipeline IR (deterministic + agentic gaps); transient report at `.work/translation_report.json`
 3. **Package** -- IR -> DAB YAML + generated notebooks + setup scripts; prunes `.work/`
 
@@ -73,16 +73,10 @@ intermediates under `.work/` (pruned by `package`).
 | `models/adf_ast.py` | Typed AST nodes for ADF definitions |
 | `models/ir.py` | Databricks intermediate representation |
 | `models/dab.py` | DAB output schema types |
-| `models/discovery.py` | Source-neutral discovery graph contract (`SourceGraph`); each source keeps its own parser and projects into it |
-| `discovery_serde.py` | SourceGraph JSON round trip and the persisted `source_graphs.json` envelope (contract version, per-graph and document hashes) |
-| `discovery_inventory.py` | The one source-agnostic emitter that projects source graphs into `inventory.json` |
-| `discovery_insights.py` | `enrich`: validates agent-authored insights, records `source_insights.json` and rebuilds `inventory.json` with it |
-| `sources/adf/loader.py` | Parses ADF exports, produces `metadata/source_graphs.json` + `metadata/inventory.json` + `metadata/profile_report.csv` |
-| `sources/adf/discovery_mapping.py` | Maps the ADF AST onto the `SourceGraph` discovery graph contract (1:1, lossless) |
-| `sources/adf/translate.py` | Registry dispatch, topological sort, context threading |
-| `sources/adf/translators/` | One module per deterministic activity type (16 total) |
-| `sources/airflow/` | Airflow source: loader, discover, and convert (mirrors the ADF source layout) |
+| `parser/adf_loader.py` | Parses ADF exports, produces `metadata/inventory.json` + `metadata/profile_report.csv` |
 | `parser/expression_parser.py` | Translates ADF expressions (@activity, @pipeline, @variables) |
+| `translator/engine.py` | Registry dispatch, topological sort, context threading |
+| `translator/activity_translators/` | One module per deterministic activity type (16 total) |
 | `preparer/workflow_preparer.py` | Orchestrates activity preparers |
 | `preparer/code_generator.py` | Notebook code generation for activity types |
 | `preparer/activity_preparers/` | One module per activity type |
@@ -92,9 +86,10 @@ intermediates under `.work/` (pruned by `package`).
 | `reporting/coverage.py` | Builds per-pipeline coverage rows from `metadata/` |
 | `reporting/results.py` | Writes per-run coverage to a UC table (run_id/run_date/run_by) via the SDK |
 | `reporting/dashboard.py` | Installs + publishes an AI/BI coverage dashboard over the results table |
-| `routing.py` | Groups pipelines into connected components over control lineage; recommends deterministic/agentic per component (both options) and records the user's decision as `metadata/conversion_plan.json` (additive; convert untouched). Agentic decisions are ADF-only |
-| `route_agentic.py` | Applies a routing decision after convert: rebuilds the report from the saved deterministic baseline (`.work/route_baseline/`), the plan and the combines stored in `metadata/agentic_combines.json`; `fill-agentic combine` is the only fill for routed-agentic groups |
-| `models/conversion_plan.py` | Typed `ConversionPlan` (schema 2): the library's load/validate/record API for `conversion_plan.json`, one decision per component, bound to the inventory, `source_graphs.json` and `source_insights.json` hashes; package fails closed on a mismatch |
+| `reporting/routing_review.py` | Renders `metadata/routing_review.html`, the standard eight-section routing review page, from `routing_review_template.html` (stdlib only, no timestamps) |
+| `routing.py` | Groups pipelines into connected components over control lineage; recommends deterministic/agentic per component (both options) and suggests groupings from the insights; writes the recommendation into `metadata/conversion_plan.json` with decisions pending and records the user's edits (additive; convert untouched). Agentic decisions are ADF-only; also the reader-side check that `agentic_insights.json` agrees with the inventory |
+| `route_agentic.py` | Applies a routing decision after convert: rebuilds the report from the never-rewritten baseline (`.work/route_baseline/`), the plan, and the agent's output in `metadata/agentic_conversion.json` (per-unit pipelines + fills of convert's own gaps); `fill-agentic` is the only fill for routed-agentic units |
+| `models/conversion_plan.py` | Typed `ConversionPlan` (schema 3): the library's load/validate/record API for `conversion_plan.json`, one decision per component (pending until made), suggested groupings, the routing conversation, bound to the inventory, `source_graphs.json` and `agentic_insights.json` hashes; package fails closed on a mismatch, a pending decision, or an unfilled agentic unit |
 
 ## Activity Types
 
@@ -136,11 +131,11 @@ ExecuteDataFlow, SqlServerStoredProcedure, AzureFunction, WebHook, Custom, Execu
 ## Adding a New Deterministic Translator
 
 1. Add IR dataclass to `src/flowx/models/ir.py`
-2. Create translator at `src/flowx/sources/adf/translators/<type>.py`
+2. Create translator at `src/flowx/translator/activity_translators/<type>.py`
 3. Create preparer at `src/flowx/preparer/activity_preparers/<type>.py`
 4. Add notebook generator to `src/flowx/preparer/code_generator.py` if needed
-5. Register in `src/flowx/sources/adf/translate.py` (TRANSLATOR_REGISTRY for leaf, match statement for control-flow)
-6. Move from AGENTIC_TYPES to DETERMINISTIC_TYPES in `src/flowx/sources/adf/loader.py`
+5. Register in engine.py (TRANSLATOR_REGISTRY for leaf, match statement for control-flow)
+6. Move from AGENTIC_TYPES to DETERMINISTIC_TYPES in adf_loader.py
 7. Update activity-mapping.md reference
 8. Add test fixtures and unit tests
 
@@ -162,10 +157,3 @@ only one-line pointers):
   proxy the SDK sees the workspace `Origin` and a proxied `Host: localhost:<port>`, so its Host/Origin
   allowlist misfires (403/421) while adding nothing on top of the proxy's authentication. Browser
   CORS is a separate concern configured via `FLOWX_ALLOWED_ORIGINS`.
-
-## Maintaining this file
-
-Keep this file for knowledge useful to almost every future agent session in this project.
-Do not repeat what the codebase already shows; point to the authoritative file or command instead.
-Prefer rewriting or pruning existing entries over appending new ones.
-When updating this file, preserve this bar for all agents and keep entries concise.

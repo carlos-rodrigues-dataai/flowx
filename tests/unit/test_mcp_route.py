@@ -1,8 +1,8 @@
-"""Tests that the reshaped MCP ``route`` / ``fill_agentic`` commands forward to the adapter CLI.
+"""Tests that the MCP ``route`` / ``fill_agentic`` commands forward to the adapter CLI.
 
-``route`` is one command: no plan => the adapter emits the recommendation; a plan (inline or path)
-=> the adapter records + edits via ``--plan-path``. ``fill_agentic`` performs the cross-pipeline
-combine fill.
+``route`` with no plan lets the adapter write the recommendation into ``conversion_plan.json``; a
+plan (inline or path) is forwarded via ``--plan-path``. Either way the recorded plan and the routing
+review page come back to the caller. ``fill_agentic`` fills a routed-agentic unit.
 """
 
 from __future__ import annotations
@@ -37,20 +37,31 @@ def captured(monkeypatch):
     def fake_run_adapter(args, **_kwargs):
         calls.append([str(a) for a in args])
         if args and args[0] == "route" and "--plan-path" not in [str(a) for a in args]:
-            return _Result(json.dumps({"components": [{"component_id": "component-1"}], "default_plan": {}}))
+            return _Result(json.dumps({"ok": True, "violations": [], "pending": ["component-1"], "applied": False}))
         return _Result(json.dumps({"ok": True, "violations": [], "components": 1, "edit": {"agentic_pipelines": []}}))
 
     monkeypatch.setattr(runner, "run_adapter", fake_run_adapter)
     return calls
 
 
-def test_route_without_a_plan_emits_the_recommendation(captured, tmp_path: Path) -> None:
+def test_route_without_a_plan_forwards_no_plan_path(captured, tmp_path: Path) -> None:
     out = server._cmd_route({"output_dir": str(tmp_path)})
     assert out["ok"] is True
-    assert out["result"]["components"][0]["component_id"] == "component-1"
     argv = captured[0]
     assert argv[0] == "route" and "--plan-path" not in argv
     assert "--output-dir" in argv
+
+
+def test_route_returns_the_recorded_plan_and_review_page_inline(captured, tmp_path: Path) -> None:
+    metadata = tmp_path / "metadata"
+    metadata.mkdir()
+    (metadata / "conversion_plan.json").write_text('{"components": []}', encoding="utf-8")
+    (metadata / "routing_review.html").write_text("<html></html>", encoding="utf-8")
+    (metadata / "inventory.json").write_text("{}", encoding="utf-8")
+
+    out = server._cmd_route({"output_dir": str(tmp_path)})
+
+    assert sorted(out["bundle"]["files"]) == ["conversion_plan.json", "routing_review.html"]
 
 
 def test_route_inline_plan_is_staged_and_forwarded_as_plan_path(captured, tmp_path: Path) -> None:
@@ -75,27 +86,9 @@ def test_route_rejects_both_plan_and_plan_path(tmp_path: Path) -> None:
     assert out["ok"] is False and "at most one" in out["error"]
 
 
-def test_route_forwards_source_so_convert_can_be_triggered(captured, tmp_path: Path) -> None:
-    # Parity with the CLI: MCP route forwards source + source-path so the CLI can trigger convert when
-    # the report is absent. Recommend path (no plan).
+def test_route_never_forwards_a_source_so_it_cannot_run_convert(captured, tmp_path: Path) -> None:
     server._cmd_route({"output_dir": str(tmp_path), "source": "adf", "adf_source_path": "/tmp/adf"})
-    argv = captured[0]
-    assert argv[argv.index("--source") + 1] == "adf"
-    assert argv[argv.index("--source-path") + 1] == "/tmp/adf"
-
-
-def test_route_forwards_source_on_the_record_path(captured, tmp_path: Path) -> None:
-    plan = {"components": [{"component_id": "component-1", "members": ["a"], "decision": "agentic"}]}
-    server._cmd_route({"output_dir": str(tmp_path), "plan": plan, "source": "adf", "adf_source_path": "/tmp/adf"})
-    argv = captured[0]
-    assert "--plan-path" in argv
-    assert argv[argv.index("--source") + 1] == "adf"
-    assert argv[argv.index("--source-path") + 1] == "/tmp/adf"
-
-
-def test_route_without_source_forwards_no_source_flags(captured, tmp_path: Path) -> None:
-    server._cmd_route({"output_dir": str(tmp_path)})
-    assert "--source" not in captured[0]
+    assert "--source" not in captured[0] and "--source-path" not in captured[0]
 
 
 def test_route_registered_in_command_map() -> None:
@@ -103,7 +96,7 @@ def test_route_registered_in_command_map() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# fill_agentic (combine).
+# fill_agentic.
 # --------------------------------------------------------------------------- #
 
 
@@ -125,7 +118,7 @@ def test_fill_agentic_inline_pipelines_are_staged(captured_fill, tmp_path: Path)
     )
     assert out["ok"] is True
     argv = captured_fill[0]
-    assert argv[0] == "fill-agentic" and argv[1] == "combine"
+    assert argv[0] == "fill-agentic" and argv[1] == "--output-dir"
     assert argv[argv.index("--members") + 1] == "parent,child"
     assert "--pipelines-path" in argv
 
