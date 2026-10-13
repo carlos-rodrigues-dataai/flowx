@@ -1480,3 +1480,26 @@ def test_a_filled_unit_keeps_a_gap_whose_name_a_non_routed_pipeline_also_holds(t
 
     gaps = json.loads((tmp_path / WORK_DIRNAME / GAPS_FILENAME).read_text(encoding="utf-8"))
     assert gaps == [{"activity_name": "probe_folder", "activity_type": "GetMetadata"}]
+
+
+def test_two_filled_units_drop_an_inventory_only_gap_name_they_share(tmp_path: Path) -> None:
+    parent = SourceGraph(name="parent", source="unit", tasks=[_node("extract", "Copy"), _node("probe", "GetMetadata")])
+    child = SourceGraph(name="child", source="unit", tasks=[_node("load", "Copy"), _node("probe", "GetMetadata")])
+    metadata = tmp_path / "metadata"
+    metadata.mkdir(parents=True, exist_ok=True)
+    inventory = build_source_inventory([parent, child], source="adf", source_dir="/tmp/src")
+    (metadata / "inventory.json").write_text(json.dumps(inventory, indent=2), encoding="utf-8")
+    report = {
+        "pipelines": [
+            {"name": "parent", "tasks": [_copy_task("extract", "extract")]},
+            {"name": "child", "tasks": [_copy_task("load", "load")]},
+        ]
+    }
+    probe_gap = {"activity_name": "probe", "activity_type": "GetMetadata"}
+    _write_work(tmp_path, report, gaps=[probe_gap, dict(probe_gap)])
+    _route_two_components(tmp_path, parent="agentic", child="agentic")
+
+    assert apply_agentic_output(tmp_path, ["parent"], [_named_lfc_pipeline("parent_lfc")])["ok"] is True
+    assert apply_agentic_output(tmp_path, ["child"], [_named_lfc_pipeline("child_lfc")])["ok"] is True
+
+    assert json.loads((tmp_path / WORK_DIRNAME / GAPS_FILENAME).read_text(encoding="utf-8")) == []

@@ -395,8 +395,8 @@ def rebuild(
     * **agentic with a stored output whose members match:** the output's pipelines replace the members,
       and the gaps the unit owns are dropped: its routed gaps, and convert's gaps for the activities
       its pipelines hold -- tasks, activities collapsed into a motif, and activities the inventory
-      lists for them that the report no longer has as tasks -- unless a pipeline outside the unit also
-      holds that name. Outcome is ``agentic-applied``.
+      lists for them that the report no longer has as tasks -- unless a pipeline that stays
+      deterministic also holds that name. Outcome is ``agentic-applied``.
     * **agentic without a matching output:** placeholders and tagged gaps as ``alter_report`` does.
       Outcome is ``agentic-not-viable``, which package refuses.
 
@@ -448,7 +448,7 @@ def rebuild(
         if output:
             outcome = OUTCOME_AGENTIC_APPLIED
             new_report = replace_unit_pipelines(new_report, members, output.get("pipelines", []))
-            owned = _unit_owned_activity_names(report, members, inventory)
+            owned = _unit_owned_activity_names(report, members, agentic_names, inventory)
             new_gaps = [gap for gap in new_gaps if not _owned_gap(gap, members, owned)]
         elif unit["decision"] == DECISION_AGENTIC:
             outcome = OUTCOME_AGENTIC_NOT_VIABLE
@@ -473,17 +473,24 @@ def rebuild(
 # --------------------------------------------------------------------------- #
 
 
-def _unit_owned_activity_names(report: dict[str, Any], members: set[str], inventory: dict[str, Any] | None) -> set[str]:
+def _unit_owned_activity_names(
+    report: dict[str, Any], members: set[str], agentic_names: set[str], inventory: dict[str, Any] | None
+) -> set[str]:
     """The activity names whose convert gaps a filled unit owns.
 
     That is every name the unit's pipelines hold in the report (tasks, containers' children and the
     activities a motif collapsed) or in the inventory (activities the report no longer has as tasks),
-    less any name a pipeline outside the unit also holds, whose gap may be that pipeline's.
+    less any name a pipeline that stays deterministic also holds, whose gap may be that pipeline's.
+    Other agentic pipelines do not keep a name: their gaps go once they are filled too.
     """
     owned: set[str] = set()
     elsewhere: set[str] = set()
     for pipeline in _report_pipelines(report):
-        (owned if pipeline.get("name") in members else elsewhere).update(_task_names(pipeline.get("tasks")))
+        name = pipeline.get("name")
+        if name in members:
+            owned.update(_task_names(pipeline.get("tasks")))
+        elif name not in agentic_names:
+            elsewhere.update(_task_names(pipeline.get("tasks")))
     for pipeline in (inventory or {}).get("pipelines") or []:
         if isinstance(pipeline, dict):
             names = {
@@ -491,7 +498,10 @@ def _unit_owned_activity_names(report: dict[str, Any], members: set[str], invent
                 for activity in pipeline.get("activities") or []
                 if isinstance(activity, dict) and activity.get("name") is not None
             }
-            (owned if pipeline.get("name") in members else elsewhere).update(names)
+            if pipeline.get("name") in members:
+                owned.update(names)
+            elif pipeline.get("name") not in agentic_names:
+                elsewhere.update(names)
     return owned - elsewhere
 
 
@@ -716,7 +726,7 @@ def apply_plan_to_report(
         stored.gap_fills,
         baseline_report_bytes,
         baseline_gaps_bytes,
-        inventory=inventory if inventory is not None else _read_inventory(output_dir),
+        inventory=inventory,
     )
     summary: dict[str, Any] = {"agentic_pipelines": sorted(agentic), "dropped_gap_fills": dropped}
     if not new_record:
