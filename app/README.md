@@ -30,7 +30,7 @@ operation; `parameters` is its keyword-argument dict.
 | `materialize_lookup` | `adapter materialize-lookup` | CSV → lookup-values JSON |
 | `workspace_paths` | `adapter workspace-paths` | Detect workspace paths / hosts |
 | `package` | `adapter package` | Emit the deployable DAB bundle |
-| `migrate` | discover→convert→package | Deterministic-only migration in one call (never runs `enrich` or `route`; for ADF, run the phases one at a time) |
+| `migrate` | discover→convert→package | Deterministic-only migration in one call (never runs `enrich` or `route`; for a migration that enriches (any source) or routes (ADF), run the phases one at a time, passing the same source to `discover` and `convert`) |
 | `record_results` | `adapter record-results` | Write coverage to a UC table |
 | `install_dashboard` | `adapter install-dashboard` | Publish the coverage dashboard |
 

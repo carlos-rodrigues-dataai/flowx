@@ -765,10 +765,10 @@ def build_server() -> FastMCP:
           exclude_dag | exclude_dags (Airflow, repeatable list),
           answers(list of "ID=VALUE"), interactive(bool, default true), lookup_csv — the
           deterministic-only shortcut: runs discover→convert→package and never runs enrich or route (they
-          need the agent and the user), so for an ADF migration run the phases one call at a time
-          instead, passing the same source to discover and convert. Returns the full option schema once
-          (status "needs_input") when configuration is available; re-call once with the complete answers
-          to apply (see below).
+          need the agent and the user), so for a migration that enriches (any source) or routes (ADF)
+          run the phases one call at a time instead, passing the same source to discover and convert.
+          Returns the full option schema once (status "needs_input") when configuration is available;
+          re-call once with the complete answers to apply (see below).
         - "record_results": output_dir(req), results_table(req: catalog.schema.table), warehouse_id.
         - "install_dashboard": results_table(req), warehouse_id, dashboard_name, parent_path.
 
