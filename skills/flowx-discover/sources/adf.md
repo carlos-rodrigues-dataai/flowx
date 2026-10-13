@@ -16,9 +16,9 @@ The directory should contain subdirectories or files for:
 - `linkedService/` or `linked_services/` — linked service JSON files (optional)
 - `trigger/` or `triggers/` — trigger definition JSON files (optional)
 
-On the MCP path the hosted server cannot read your workspace/volume files, so pass the ADF JSON
-inline as `adf_definitions` (a mapping of relative path → JSON content), or for large factories
-reference the source via `adf_volume_path` / `adf_workspace_path`.
+On the MCP path the hosted server cannot read your local files, so reference the source via
+`adf_volume_path` / `adf_workspace_path` (the server reads them through the SDK), or for small
+factories pass the ADF JSON inline as `adf_definitions` (a mapping of relative path → JSON content).
 
 ## Step 2 — Download from UC volumes if needed
 

@@ -49,13 +49,15 @@ Every discover/convert/migrate call requires `source` ("adf" | "airflow") — th
 ADF reads adf_volume_path | adf_workspace_path | adf_definitions | adf_source_path; Airflow reads
 airflow_source_path (a DAG .py file or directory).
 
-Typical flow (ADF shown; swap source + source-path for Airflow):
+Typical flow (ADF shown; for Airflow swap source + source-path and skip route and fill_agentic,
+which are ADF only). Run it one call per phase: enrich is the default for every source and route
+for ADF, because they need you (authoring the insights) and the user (the routing decisions):
   flowx("inputs", {"phase": "discover", "source": "adf"})   # learn a phase's inputs
   flowx("discover", {"source": "adf", "adf_source_path": "...", "output_dir": "..."})
-  flowx("enrich", {"output_dir": "...", "action": "prepare"})  # optional: read inventory.json to author insights
-  flowx("enrich", {"output_dir": "...", "insights": {...}})   # optional: record agent-authored insights
-  flowx("convert", {"source": "adf", "output_dir": "..."})
-  flowx("route", {"output_dir": "..."})                       # optional: write the plan + review page
+  flowx("enrich", {"output_dir": "...", "action": "prepare"})  # read inventory.json to author insights
+  flowx("enrich", {"output_dir": "...", "insights": {...}})   # record agent-authored insights
+  flowx("convert", {"source": "adf", "adf_source_path": "...", "output_dir": "..."})  # same source as discover
+  flowx("route", {"output_dir": "..."})                       # write the plan + review page for the user
   flowx("route", {"output_dir": "...", "plan": {...}})        # record the decisions, apply once decided
   flowx("fill_agentic", {"output_dir": "...", "members": [...], "pipelines": [...]})  # fill an agentic unit
   flowx("inspect", {"report_path": "<output_dir>/.work/translation_report.json"})
@@ -63,7 +65,8 @@ Typical flow (ADF shown; swap source + source-path for Airflow):
   flowx("package", {"output_dir": "...", "catalog": "main", "schema": "default"})
 For a reviewed Airflow leaf gap, call `resolve_agentic` with action `prepare`, then `stage` with
 provider-authored candidates, then `apply` with an explicit `accept_gap` allowlist.
-Or run it all at once:
+Deterministic-only shortcut, only when the user asks for no enrich and no routing: `migrate` runs
+discover → convert → package in one call and never enriches or routes:
   flowx("migrate", {"source": "airflow", "airflow_source_path": "...", "output_dir": "...",
                     "catalog": "...", "schema": "..."})
 
@@ -688,8 +691,8 @@ def build_server() -> FastMCP:
           list a phase's input prompts.
         - "discover": source(req), one ADF source key | airflow_source_path (req), output_dir,
           pipeline, exclude_dag | exclude_dags (Airflow, repeatable list) — parse and audit definitions.
-        - "convert": source(req), (one ADF source key | airflow_source_path), output_dir, pipeline,
-          exclude_dag | exclude_dags (Airflow, repeatable list).
+        - "convert": source(req), one ADF source key | airflow_source_path (req: the same source discover
+          read), output_dir, pipeline, exclude_dag | exclude_dags (Airflow, repeatable list).
         - "merge_agentic": source(req: "adf"), report_path(req), agentic_results_dir(req), output_path —
           merge ADF agent results for convert's own agentic gaps. Refuses (writing nothing) any
           result landing in a pipeline the routing record routes agentic — fill those with
@@ -760,9 +763,12 @@ def build_server() -> FastMCP:
         - "migrate": source(req), one ADF source key | airflow_source_path (req), output_dir,
           output_volume_path, output_workspace_path, catalog, schema, pipeline,
           exclude_dag | exclude_dags (Airflow, repeatable list),
-          answers(list of "ID=VALUE"), interactive(bool, default true), lookup_csv — runs
-          discover→convert→package, returning the full option schema once (status "needs_input") when
-          configuration is available; re-call once with the complete answers to apply (see below).
+          answers(list of "ID=VALUE"), interactive(bool, default true), lookup_csv — the
+          deterministic-only shortcut: runs discover→convert→package and never runs enrich or route (they
+          need the agent and the user), so for a migration that enriches (any source) or routes (ADF)
+          run the phases one call at a time instead, passing the same source to discover and convert.
+          Returns the full option schema once (status "needs_input") when configuration is available;
+          re-call once with the complete answers to apply (see below).
         - "record_results": output_dir(req), results_table(req: catalog.schema.table), warehouse_id.
         - "install_dashboard": results_table(req), warehouse_id, dashboard_name, parent_path.
 
