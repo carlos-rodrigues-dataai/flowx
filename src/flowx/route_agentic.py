@@ -382,6 +382,8 @@ def rebuild(
     gap_fills: list[dict[str, Any]] | None,
     baseline_report_bytes: bytes,
     baseline_gaps_bytes: bytes,
+    *,
+    inventory: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
     """Pure rebuild: derive the routed report, gaps, and record from the baseline, fills and plan.
 
@@ -390,8 +392,11 @@ def rebuild(
     baseline, then turns each agentic unit's tasks into placeholders and gaps, and finally, per unit:
 
     * **deterministic:** the baseline pipelines stay; outcome is ``deterministic``.
-    * **agentic with a stored output whose members match:** the output's pipelines replace the members
-      and the members' routed gaps are dropped. Outcome is ``agentic-applied``.
+    * **agentic with a stored output whose members match:** the output's pipelines replace the members,
+      and the gaps the unit owns are dropped: its routed gaps, and convert's gaps for the activities
+      its pipelines hold -- tasks, activities collapsed into a motif, and activities the inventory
+      lists for them that the report no longer has as tasks -- unless a pipeline outside the unit also
+      holds that name. Outcome is ``agentic-applied``.
     * **agentic without a matching output:** placeholders and tagged gaps as ``alter_report`` does.
       Outcome is ``agentic-not-viable``, which package refuses.
 
@@ -409,6 +414,8 @@ def rebuild(
         gap_fills: The stored gap fills that check out; those merged against another baseline are skipped.
         baseline_report_bytes: Raw bytes of the baseline report file, hashed into the record.
         baseline_gaps_bytes: Raw bytes of the baseline gaps file, hashed into the record.
+        inventory: The discover ``inventory.json``, whose per-pipeline activities a filled unit also
+            owns; without it a filled unit owns only what the report shows.
     """
     from flowx.ir_serde import replace_task_by_name
 
@@ -441,7 +448,8 @@ def rebuild(
         if output:
             outcome = OUTCOME_AGENTIC_APPLIED
             new_report = replace_unit_pipelines(new_report, members, output.get("pipelines", []))
-            new_gaps = [gap for gap in new_gaps if not (isinstance(gap, dict) and gap.get("pipeline") in members)]
+            owned = _unit_owned_activity_names(report, members, inventory)
+            new_gaps = [gap for gap in new_gaps if not _owned_gap(gap, members, owned)]
         elif unit["decision"] == DECISION_AGENTIC:
             outcome = OUTCOME_AGENTIC_NOT_VIABLE
         else:
@@ -463,6 +471,37 @@ def rebuild(
 # --------------------------------------------------------------------------- #
 # The edit step: rewrite the report for routed-agentic groups.
 # --------------------------------------------------------------------------- #
+
+
+def _unit_owned_activity_names(report: dict[str, Any], members: set[str], inventory: dict[str, Any] | None) -> set[str]:
+    """The activity names whose convert gaps a filled unit owns.
+
+    That is every name the unit's pipelines hold in the report (tasks, containers' children and the
+    activities a motif collapsed) or in the inventory (activities the report no longer has as tasks),
+    less any name a pipeline outside the unit also holds, whose gap may be that pipeline's.
+    """
+    owned: set[str] = set()
+    elsewhere: set[str] = set()
+    for pipeline in _report_pipelines(report):
+        (owned if pipeline.get("name") in members else elsewhere).update(_task_names(pipeline.get("tasks")))
+    for pipeline in (inventory or {}).get("pipelines") or []:
+        if isinstance(pipeline, dict):
+            names = {
+                str(activity.get("name"))
+                for activity in pipeline.get("activities") or []
+                if isinstance(activity, dict) and activity.get("name") is not None
+            }
+            (owned if pipeline.get("name") in members else elsewhere).update(names)
+    return owned - elsewhere
+
+
+def _owned_gap(gap: Any, members: set[str], owned: set[str]) -> bool:
+    """Whether a gap belongs to a filled unit: tagged with one of its pipelines, or an untagged convert gap it owns."""
+    if not isinstance(gap, dict):
+        return False
+    if gap.get("pipeline") is None:
+        return gap.get("activity_name") in owned
+    return gap.get("pipeline") in members
 
 
 def _report_pipelines(report: dict[str, Any]) -> list[dict[str, Any]]:
@@ -610,6 +649,15 @@ def baseline_pipeline_mismatch(baseline_report: dict[str, Any], inventory: dict[
     )
 
 
+def _read_inventory(output_dir: Path) -> dict[str, Any] | None:
+    """The discover ``inventory.json`` under ``output_dir``, or ``None`` when it is missing or unreadable."""
+    try:
+        inventory = json.loads((Path(output_dir) / METADATA_DIRNAME / INVENTORY_FILENAME).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return inventory if isinstance(inventory, dict) else None
+
+
 def apply_plan_to_report(
     output_dir: Path, plan: dict[str, Any], *, inventory: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -668,6 +716,7 @@ def apply_plan_to_report(
         stored.gap_fills,
         baseline_report_bytes,
         baseline_gaps_bytes,
+        inventory=inventory if inventory is not None else _read_inventory(output_dir),
     )
     summary: dict[str, Any] = {"agentic_pipelines": sorted(agentic), "dropped_gap_fills": dropped}
     if not new_record:
@@ -877,12 +926,15 @@ def _task_names(tasks: Any) -> set[str]:
 
     Convert keeps an agentic container such as an ``Until`` as one placeholder, but still records a gap
     for each activity inside it, so the names nested in a placeholder's ADF definition count as well.
+    So do the activities a motif collapsed, which survive only in its ``matched_activity_names``.
     """
     names: set[str] = set()
     for task in _walk_tasks(tasks):
         names.add(str(task.get("name")))
         if task.get("type") == "PlaceholderActivity":
             names.update(_adf_activity_names([task.get("raw_definition")]))
+        if task.get("type") == "MotifActivity":
+            names.update(str(name) for name in task.get("matched_activity_names") or [])
     return names
 
 
@@ -1044,6 +1096,7 @@ def apply_agentic_output(
         stored.gap_fills,
         baseline_report_bytes,
         baseline_gaps_bytes,
+        inventory=_read_inventory(output_dir),
     )
     folder_clashes = _bundle_folder_clashes(new_report, authored_names)
     if folder_clashes:

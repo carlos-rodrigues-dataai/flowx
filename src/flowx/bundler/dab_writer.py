@@ -552,6 +552,7 @@ def _live_report_failures(
         stored.gap_fills,
         baseline_report_bytes,
         baseline_gaps_bytes,
+        inventory=inventory,
     )
     report_without_record = {key: value for key, value in report.items() if key != ROUTING_RECORD_KEY}
     if rebuilt_record != record or report_without_record != rebuilt_report:
