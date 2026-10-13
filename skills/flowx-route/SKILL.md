@@ -26,8 +26,8 @@ Connect pipeline). Route writes its recommendation straight into `metadata/conve
 one readable record of the decisions, and draws it as `metadata/routing_review.html`. The user decides,
 you edit the plan, route applies it to the translation report, and you author the fill.
 
-**ADF only (current scope).** The discover → enrich → route → fill agentic-conversion flow is
-supported for **ADF today**, and `route` enforces it: for an Airflow inventory it recommends and
+**ADF only (current scope).** Enrich runs for every source, but the route → fill agentic-conversion
+flow is supported for **ADF today**, and `route` enforces it: for an Airflow inventory it recommends and
 records only `deterministic` decisions, suggests no groupings, and rejects an `agentic` decision (the
 plan is not recorded and the report is left untouched). `convert --merge-agentic --source airflow` is
 disabled too. Airflow DAGs are often one connected component, so Airflow agentic conversion follows the

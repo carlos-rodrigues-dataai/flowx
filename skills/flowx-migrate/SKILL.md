@@ -24,8 +24,8 @@ via Declarative Automation Bundles. This skill runs the full flow in sequence: d
 
 This is the top-level orchestration skill. It runs the full migration pipeline:
 
-> **Scope:** deterministic discover → convert → package works for **both ADF and Airflow**. The
-> **routing + agentic-conversion path (enrich → route → fill)** applies to **ADF today**, and
+> **Scope:** deterministic discover → convert → package works for **both ADF and Airflow**, and enrich
+> runs for every source. The **routing + agentic-conversion path (route → fill)** applies to **ADF today**, and
 > `route` enforces it: an Airflow inventory is routed `deterministic` only, and
 > `convert --merge-agentic --source airflow` is disabled. Airflow gaps follow their own
 > `flowx-resolve-airflow-gaps` path.
