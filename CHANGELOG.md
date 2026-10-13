@@ -11,7 +11,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Route step: decides deterministic or agentic conversion per connected component, records the
   decision in the conversion plan, and renders a routing review page
 - Fill-agentic step: applies the agent's conversion output to routed-agentic units
-- Agentic component: a component routed to the agent is converted as one unit and owns its convert gaps
+- Agentic component: for an activity the typed engine cannot express, the agent can author Databricks
+  tasks, files, pipeline resources and job environments, which package writes into the bundle while
+  flowx keeps the task name, dependencies and run policy
 
 ## [0.1.0]
 
