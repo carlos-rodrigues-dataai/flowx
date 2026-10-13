@@ -73,8 +73,36 @@ only**. Everything goes through the single **`flowx`** tool, one `command` per s
 The hosted server **cannot read your workspace/volume files**, so pass the ADF JSON **inline** as
 `adf_definitions` (a mapping of relative path → ARM JSON content mirroring the Git-export layout —
 `pipeline/…`, `dataset/…`, `linkedService/…`, `trigger/…`). You read those files and supply them.
-The **recommended Genie path is a single `migrate` call**, which avoids re-sending the payload per
-phase:
+
+**Run the same Workflow as the CLI path, one `flowx` call per phase**: discover → enrich (default) →
+convert → route → fill → configuration options → package, in the order of the steps below. Do **not**
+replace it with one `migrate` call: `migrate` is server code, which can't author the insights or ask
+the user for the routing decisions, so it runs only discover → convert → package and never enriches
+or routes. Convert reads the source again, so pass the **same source key to `discover` and
+`convert`**. With inline `adf_definitions` that means sending the payload twice; a volume or workspace
+path (below) sends only the path. Every other command reuses `output_dir`. `source` ("adf" |
+"airflow") is required for discover/convert and for `inputs discover`/`inputs convert`; for Airflow,
+swap `adf_definitions` for `airflow_source_path` and skip enrich, route and fill (ADF only today).
+`merge_agentic` is ADF-only. `package` and `inputs package` are source-independent:
+
+```
+flowx(command="inputs", parameters={"phase": "discover", "source": "adf"})  # source req for discover/convert
+flowx(command="discover", parameters={"source": "adf", "adf_definitions": {...}, "output_dir": ..., "pipeline": ...})
+flowx(command="enrich", parameters={"output_dir": ..., "action": "prepare"})  # returns inventory.json to author against
+flowx(command="enrich", parameters={"output_dir": ..., "insights": {...}})  # default: author + record the insights layer (see flowx-enrich)
+flowx(command="convert", parameters={"source": "adf", "adf_definitions": {...}, "output_dir": ..., "pipeline": ...})  # same source as discover; deterministic baseline, BEFORE route
+flowx(command="route", parameters={"output_dir": ...})  # writes the plan + review page; re-call with the decided "plan": {...} to apply (see flowx-route)
+flowx(command="merge_agentic", parameters={"source": "adf", "report_path": ..., "agentic_results_dir": ..., "output_path": ...})  # ADF only, fills convert's own gaps
+flowx(command="fill_agentic", parameters={"output_dir": ..., "members": [...], "pipelines": [...]})  # the only fill for a routed-agentic unit
+flowx(command="inspect", parameters={"report_path": ...})
+flowx(command="apply_answers", parameters={"report_path": ..., "answers": [...], "output_dir": ...})
+flowx(command="package", parameters={"output_dir": ..., "catalog": ..., "schema": ...})
+flowx(command="record_results", parameters={...}) / flowx(command="install_dashboard", parameters={...})
+```
+
+**Deterministic-only shortcut: `migrate`.** Only when the user explicitly asks for a deterministic-only
+pass (no enrich, no routing, as in Step 4), one `migrate` call runs discover → convert → package and
+sends the source once:
 
 ```
 flowx(command="migrate", parameters={
@@ -88,7 +116,8 @@ raises any configuration options (e.g. how to handle an `activity_and_notify` mo
 bulk-copy consolidation, non-Databricks task compute), it **does not package** — it returns the
 **full option schema once**: `{"status": "needs_input", "pending_options": [{"pipeline_name",
 "options": [{option_id, prompt, rationale, choices, free_text, default, show_when}, …]}, …],
-"report_path", "output_dir"}`. You drive the whole chain locally — no per-answer round trip:
+"report_path", "output_dir"}`. You drive the whole chain locally — no per-answer round trip (the same
+walk applies to `inspect` → `apply_answers` on the step-by-step path):
 
 1. **Ask an option only when its `show_when` is satisfied** — every clause `{option_id, in:[values]}`
    must match an answer you've already collected (empty `show_when` = always ask). So
@@ -113,24 +142,6 @@ To accept all defaults and skip the prompts, pass `"interactive": false`. (Re-ca
 > **or** `"output_workspace_path": "/Workspace/Shared/dab"` so the generated bundle is written to that
 > target via the SDK (returned as `bundle_uploaded` instead of inline `bundle`). Grant the
 > `mcp-flowx` app's service principal read on the source and write on the output target.
-
-For step-by-step control, run the commands in order (the app reuses `output_dir` across calls, so
-only `discover` needs the source input). `source` ("adf" | "airflow") is required for
-discover/convert and for `inputs discover`/`inputs convert`; for Airflow, swap `adf_definitions` for `airflow_source_path`. `merge_agentic` is ADF-only. `package` and `inputs package` are source-independent:
-
-```
-flowx(command="inputs", parameters={"phase": "discover", "source": "adf"})  # source req for discover/convert
-flowx(command="discover", parameters={"source": "adf", "adf_definitions": {...}, "output_dir": ..., "pipeline": ...})
-flowx(command="enrich", parameters={"output_dir": ..., "insights": {...}})  # default: author + merge the insights layer (see flowx-enrich)
-flowx(command="convert", parameters={"source": "adf", "output_dir": ..., "pipeline": ...})  # deterministic baseline, BEFORE route
-flowx(command="route", parameters={"output_dir": ...})  # writes the plan + review page; re-call with the decided "plan": {...} to apply (see flowx-route)
-flowx(command="merge_agentic", parameters={"source": "adf", "report_path": ..., "agentic_results_dir": ..., "output_path": ...})  # ADF only, fills convert's own gaps
-flowx(command="fill_agentic", parameters={"output_dir": ..., "members": [...], "pipelines": [...]})  # the only fill for a routed-agentic unit
-flowx(command="inspect", parameters={"report_path": ...})
-flowx(command="apply_answers", parameters={"report_path": ..., "answers": [...], "output_dir": ...})
-flowx(command="package", parameters={"output_dir": ..., "catalog": ..., "schema": ...})
-flowx(command="record_results", parameters={...}) / flowx(command="install_dashboard", parameters={...})
-```
 
 For an Airflow report with eligible leaf placeholders, use the `flowx-resolve-airflow-gaps` skill between convert and package. It calls `resolve_agentic` with `action="prepare"`, stages one or more provider candidates, and applies only the gap fingerprints the user explicitly accepts. Package must then receive `<output_dir>/.work/translation_report.agentic.json` as `report_path`.
 

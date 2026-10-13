@@ -42,7 +42,9 @@ agentic-gap flow with just-in-time configuration. Airflow converts deterministic
 Run the **`setup`** skill first if you haven't.
 
 - **MCP tool (Genie Code, or local stdio):** call the single **`flowx`** tool with
-  `command="convert"` and `parameters` including `"source": "<source>"` and `"output_dir": "<dir>"`.
+  `command="convert"` and `parameters` including `"source": "<source>"`, `"output_dir": "<dir>"` and
+  the same source key discover read (`adf_definitions`, `adf_volume_path`, `adf_workspace_path` or
+  `airflow_source_path`): convert reads the source again.
 
 - **venv CLI (local):**
 
