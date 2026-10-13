@@ -683,7 +683,8 @@ def apply_plan_to_report(
     modify's configured copy; package asks for ``modify`` again when it is out of date.
 
     With ``inventory`` given and an agentic unit in the plan, the baseline's pipelines must be the
-    inventory's (see :func:`baseline_pipeline_mismatch`).
+    inventory's (see :func:`baseline_pipeline_mismatch`), and a filled unit also owns the convert gaps
+    of the activities the inventory lists for its pipelines (see :func:`rebuild`).
 
     Returns a summary dict with the altered pipeline names, the resulting gap count, each unit's
     outcome and how many stale gap fills were dropped.
