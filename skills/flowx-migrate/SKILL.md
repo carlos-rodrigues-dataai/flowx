@@ -84,7 +84,7 @@ or routes. Convert reads the source again, so pass the **same source key to `dis
 `convert`**. With inline `adf_definitions` that means sending the payload twice; a volume or workspace
 path (below) sends only the path. Every other command reuses `output_dir`. `source` ("adf" |
 "airflow") is required for discover/convert and for `inputs discover`/`inputs convert`; for Airflow,
-swap `adf_definitions` for `airflow_source_path` and skip enrich, route and fill (ADF only today).
+swap `adf_definitions` for `airflow_source_path` and skip route and fill (ADF only today).
 `merge_agentic` is ADF-only. `package` and `inputs package` are source-independent:
 
 ```

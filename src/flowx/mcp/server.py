@@ -49,9 +49,9 @@ Every discover/convert/migrate call requires `source` ("adf" | "airflow") — th
 ADF reads adf_volume_path | adf_workspace_path | adf_definitions | adf_source_path; Airflow reads
 airflow_source_path (a DAG .py file or directory).
 
-Typical flow (ADF shown; for Airflow swap source + source-path and skip enrich, route and
-fill_agentic, which are ADF only). Run it one call per phase: enrich and route are the default for
-ADF, because they need you (authoring the insights) and the user (the routing decisions):
+Typical flow (ADF shown; for Airflow swap source + source-path and skip route and fill_agentic,
+which are ADF only). Run it one call per phase: enrich is the default for every source and route
+for ADF, because they need you (authoring the insights) and the user (the routing decisions):
   flowx("inputs", {"phase": "discover", "source": "adf"})   # learn a phase's inputs
   flowx("discover", {"source": "adf", "adf_source_path": "...", "output_dir": "..."})
   flowx("enrich", {"output_dir": "...", "action": "prepare"})  # read inventory.json to author insights
