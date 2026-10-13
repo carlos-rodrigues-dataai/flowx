@@ -1413,3 +1413,93 @@ def test_package_refuses_an_edited_gap_fill(tmp_path: Path, capsys: pytest.Captu
     assert package_main(["--output-dir", str(tmp_path), "--no-download-workspace-files"]) == 1
 
     assert "agentic_conversion.json has been edited (gap fill 'Load')" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------- #
+# A filled unit owns the convert gaps of its collapsed motifs and its inventory-only activities.
+# --------------------------------------------------------------------------- #
+
+
+def _motif_task() -> dict[str, Any]:
+    """A motif that collapsed the 'list_files' and 'copy_files' activities into one task."""
+    return {
+        "name": "File ingestion",
+        "task_key": "file_ingestion",
+        "type": "MotifActivity",
+        "motif_id": "file_ingestion",
+        "display_name": "File ingestion",
+        "databricks_replacement": "auto_loader",
+        "matched_activity_names": ["list_files", "copy_files"],
+    }
+
+
+def _route_parent_with_motif_and_missing_activity(output_dir: Path, *, child_activities: list[str]) -> None:
+    """Route 'parent' agentic: its report task is a collapsed motif, and 'probe_folder' is in the inventory only."""
+    parent = SourceGraph(
+        name="parent",
+        source="unit",
+        tasks=[_node("list_files", "GetMetadata"), _node("copy_files", "Copy"), _node("probe_folder", "GetMetadata")],
+    )
+    child = SourceGraph(name="child", source="unit", tasks=[_node(name, "Copy") for name in child_activities])
+    metadata = output_dir / "metadata"
+    metadata.mkdir(parents=True, exist_ok=True)
+    inventory = build_source_inventory([parent, child], source="adf", source_dir="/tmp/src")
+    (metadata / "inventory.json").write_text(json.dumps(inventory, indent=2), encoding="utf-8")
+    report = {
+        "pipelines": [
+            {"name": "parent", "tasks": [_motif_task()]},
+            {"name": "child", "tasks": [_copy_task(name, name) for name in child_activities]},
+        ]
+    }
+    convert_gaps = [
+        {"activity_name": "list_files", "activity_type": "GetMetadata"},
+        {"activity_name": "probe_folder", "activity_type": "GetMetadata"},
+    ]
+    _write_work(output_dir, report, gaps=convert_gaps)
+    _route_two_components(output_dir, parent="agentic", child="deterministic")
+
+
+def test_a_filled_unit_drops_the_gaps_of_its_collapsed_motif_and_inventory_only_activities(tmp_path: Path) -> None:
+    _route_parent_with_motif_and_missing_activity(tmp_path, child_activities=["publish"])
+    gaps_path = tmp_path / WORK_DIRNAME / GAPS_FILENAME
+    unfilled = json.loads(gaps_path.read_text(encoding="utf-8"))
+    assert {(gap.get("pipeline"), gap["activity_name"]) for gap in unfilled} == {
+        ("parent", "File ingestion"),
+        (None, "probe_folder"),
+    }
+
+    assert apply_agentic_output(tmp_path, ["parent"], [_named_lfc_pipeline("parent_lfc")])["ok"] is True
+
+    assert json.loads(gaps_path.read_text(encoding="utf-8")) == []
+
+
+def test_a_filled_unit_keeps_a_gap_whose_name_a_non_routed_pipeline_also_holds(tmp_path: Path) -> None:
+    _route_parent_with_motif_and_missing_activity(tmp_path, child_activities=["publish", "probe_folder"])
+
+    assert apply_agentic_output(tmp_path, ["parent"], [_named_lfc_pipeline("parent_lfc")])["ok"] is True
+
+    gaps = json.loads((tmp_path / WORK_DIRNAME / GAPS_FILENAME).read_text(encoding="utf-8"))
+    assert gaps == [{"activity_name": "probe_folder", "activity_type": "GetMetadata"}]
+
+
+def test_two_filled_units_drop_an_inventory_only_gap_name_they_share(tmp_path: Path) -> None:
+    parent = SourceGraph(name="parent", source="unit", tasks=[_node("extract", "Copy"), _node("probe", "GetMetadata")])
+    child = SourceGraph(name="child", source="unit", tasks=[_node("load", "Copy"), _node("probe", "GetMetadata")])
+    metadata = tmp_path / "metadata"
+    metadata.mkdir(parents=True, exist_ok=True)
+    inventory = build_source_inventory([parent, child], source="adf", source_dir="/tmp/src")
+    (metadata / "inventory.json").write_text(json.dumps(inventory, indent=2), encoding="utf-8")
+    report = {
+        "pipelines": [
+            {"name": "parent", "tasks": [_copy_task("extract", "extract")]},
+            {"name": "child", "tasks": [_copy_task("load", "load")]},
+        ]
+    }
+    probe_gap = {"activity_name": "probe", "activity_type": "GetMetadata"}
+    _write_work(tmp_path, report, gaps=[probe_gap, dict(probe_gap)])
+    _route_two_components(tmp_path, parent="agentic", child="agentic")
+
+    assert apply_agentic_output(tmp_path, ["parent"], [_named_lfc_pipeline("parent_lfc")])["ok"] is True
+    assert apply_agentic_output(tmp_path, ["child"], [_named_lfc_pipeline("child_lfc")])["ok"] is True
+
+    assert json.loads((tmp_path / WORK_DIRNAME / GAPS_FILENAME).read_text(encoding="utf-8")) == []
