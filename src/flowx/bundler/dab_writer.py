@@ -224,7 +224,7 @@ def _namespace_pydabs_hooks(
 
     for nested in nested_workflows:
         for notebook in nested.notebooks:
-            if notebook.relative_path not in hooks:
+            if notebook.authored or notebook.relative_path not in hooks:
                 continue
             new_path, old_job_key, new_job_key = hooks[notebook.relative_path]
             notebook.relative_path = new_path
@@ -284,7 +284,7 @@ def _namespace_bundle_artifacts(workflow: PreparedWorkflow, prefix: str) -> None
             old_path = notebook.relative_path
             # Bundle-root Python resources — the dbt hook modules namespaced in step 0, the resources
             # package marker, pyproject.toml — import by path from the root, so leave them in place.
-            if old_path.startswith("resources/") or old_path == "pyproject.toml":
+            if _is_bundle_root_artifact(notebook):
                 continue
             new_path = _prefixed_notebook_relative_path(old_path, prefix)
             if old_path != new_path:
