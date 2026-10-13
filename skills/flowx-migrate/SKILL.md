@@ -70,9 +70,11 @@ there is **no venv, no `bootstrap.sh`, and no `.migration-venv`**. Run **no** `p
 commands on this path; the `"$PY" -m …` snippets in the steps below are the **local-CLI fallback
 only**. Everything goes through the single **`flowx`** tool, one `command` per step:
 
-The hosted server **cannot read your workspace/volume files**, so pass the ADF JSON **inline** as
-`adf_definitions` (a mapping of relative path → ARM JSON content mirroring the Git-export layout —
-`pipeline/…`, `dataset/…`, `linkedService/…`, `trigger/…`). You read those files and supply them.
+The hosted server **cannot read your local files**, so pass the source by reference as
+`adf_volume_path` or `adf_workspace_path` (the server reads them through the SDK; see below), or, for
+small factories, inline as `adf_definitions` (a mapping of relative path → ARM JSON content mirroring
+the Git-export layout — `pipeline/…`, `dataset/…`, `linkedService/…`, `trigger/…`), which you read and
+supply yourself.
 
 **Run the same Workflow as the CLI path, one `flowx` call per phase**: discover → enrich (default) →
 convert → route → fill → configuration options → package, in the order of the steps below. Do **not**
