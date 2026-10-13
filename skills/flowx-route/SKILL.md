@@ -183,7 +183,10 @@ of convert's own gaps, the plan, and the agent's outputs in `metadata/agentic_co
 
 - **deterministic**: the baseline pipelines stay (outcome `deterministic`).
 - **agentic with a stored output** whose members match: the output's pipelines replace the members,
-  and their routed gaps are dropped (outcome `agentic-applied`).
+  and their routed gaps are dropped (outcome `agentic-applied`). So are convert's untagged gaps for the
+  activities the unit owns: its tasks, the activities a motif collapsed, and activities only the
+  inventory lists for its pipelines. Such a gap is kept only when a pipeline that stays deterministic
+  also holds that name.
 - **agentic without one**: every task becomes a `PlaceholderActivity` with one pipeline-tagged gap,
   the deterministic translation kept as its `raw_definition` (outcome `agentic-not-viable` — package
   refuses until it is filled).
