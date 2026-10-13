@@ -33,6 +33,7 @@ from flowx.models.ir import (
     WaitActivity,
     WebActivity,
 )
+from flowx.motifs.collapsed_lookup_refs import repair_collapsed_lookup_references
 
 _TASK_NOTIFICATION_KEYS = ("email_notifications", "webhook_notifications")
 
@@ -331,6 +332,11 @@ def merge_prepared_artifacts(
 
 def prepare_workflow(pipeline: Pipeline) -> PreparedWorkflow:
     """Converts a Pipeline IR into a PreparedWorkflow ready for the DAB bundle writer."""
+    # Repair references to a Lookup a motif collapsed, before preparing tasks. Done here (the
+    # single entry both the serialized-report and in-process paths share) so every packaging
+    # route is covered and the two produce identical bundles. Idempotent and a no-op when there
+    # is no such motif.
+    pipeline = repair_collapsed_lookup_references(pipeline)
     all_tasks: list[dict[str, Any]] = []
     artifacts = PreparedArtifacts()
     cluster_hints: list[dict[str, Any]] = []
@@ -391,10 +397,17 @@ def prepare_workflow(pipeline: Pipeline) -> PreparedWorkflow:
             )
         )
 
-    # Airflow catchup=True has no DABs schedule setting; surface that history is replayed via a native
-    # Databricks backfill, which overrides the run_date job parameter with {{backfill.iso_date}}.
-    if pipeline.tags.get("airflow_catchup") == "true":
-        setup_tasks_out.append(SetupTask(type="airflow_backfill", config={"pipeline": pipeline.name}))
+    # Airflow catchup=True has no DABs schedule setting, and interval macros resolve from the run's
+    # trigger instant; both need backfill guidance naming the trigger-instant parameters to override.
+    date_resolver = pipeline.tags.get("airflow_logical_date_resolver") == "true"
+    catchup = pipeline.tags.get("airflow_catchup") == "true"
+    if catchup or date_resolver:
+        setup_tasks_out.append(
+            SetupTask(
+                type="airflow_backfill",
+                config={"pipeline": pipeline.name, "catchup": catchup, "date_resolver": date_resolver},
+            )
+        )
 
     # C-39 (LSC4-004): ADF auth modes with no Databricks equivalent (MSI, CredentialReference) make the
     # default_cluster fall back to single_user_name: ${workspace.current_user.userName}; flag it via SetupTask.

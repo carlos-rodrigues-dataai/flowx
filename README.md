@@ -197,6 +197,12 @@ Unlike the ADF path, an Airflow operator's path is decided **per instance** by w
 | Sensors — cross-DAG | `ExternalTaskSensor` (+ `…Async`) | Placeholder + gap | Agentic |
 | Sensors — time | `TimeSensor`, `TimeDeltaSensor` | Placeholder + gap | Agentic |
 | dbt | `DbtRun/Test/Seed/Snapshot/Build/DepsOperator`, Cosmos `DbtDag` / `DbtTaskGroup` | single `DbtFactoryActivity` (static explosion, or PyDABs via `--dbt-mode pydabs`) | Deterministic |
+| Dataproc / Managed Spark | `DataprocSubmitJobOperator`, `DataprocCreateBatchOperator` (+ `ManagedSpark…` aliases) with `pyspark_job` / `pyspark_batch` | `spark_python_task` | Deterministic † |
+| Dataproc / Managed Spark | same, with `spark_job` / `spark_batch` | `spark_jar_task` (JARs as task libraries) | Deterministic † |
+| Dataproc / Managed Spark | same, with inline `spark_sql_job` | `sql_task` | Deterministic † |
+| Dataproc / Managed Spark | same, with `spark_r_*`, `pyspark_notebook_batch`, `hive_job`, `hadoop_job`, `pig_job`, `flink_job`, `presto_job`, `trino_job` | Placeholder + gap | Agentic |
+| Dataproc / Managed Spark | cluster create / delete / start / stop, `DataprocJobSensor`, `DataprocBatchSensor` | — (absorbed into Jobs compute / native task completion, dependencies rewired) | Dropped ‡ |
+| Dataproc / Managed Spark | cluster update / scale / diagnose, workflow templates, batch control, cancel operation | Placeholder + gap | Agentic |
 | TaskFlow API | `@dag`, `@task`, `@task.virtualenv` | task; implicit XCom → `dbutils.jobs.taskValues` | Deterministic † |
 | TaskFlow API | `@task.expand([literal])` | `for_each_task` | Deterministic † |
 | TaskFlow API | `@task.branch`, `@task.short_circuit`, `@task_group` (decorator form) | Placeholder + gap | Agentic |
@@ -207,12 +213,17 @@ task context or XCom, an unsafe inline template context, or a non-literal `.expa
 `.partial().expand()`.
 **Agentic** emits a failing placeholder + `gaps.json` entry (eligible for the leaf-gap
 resolver) because the construct's behavior is inherently runtime.
+**‡** Dropped only when provably safe: every job on the cluster migrates, no other task reads the removed
+task's output, the sensor pairs with an upstream asynchronous submission (or matching `batch_id`) (its timing is reported, not turned into a task timeout), and rewiring does
+not change trigger-rule behavior. Otherwise the task stays as a placeholder with the reason attached.
 
 **Scheduling & semantics** (source-level, applied alongside the operators above): cron → Quartz,
-`timedelta` → periodic, `@continuous` → continuous mode, Airflow-3 Asset/Dataset lists →
+`timedelta` → a `start_date`-anchored Quartz cron when its length divides an hour or a day (else periodic), `@continuous` → continuous mode, Airflow-3 Asset/Dataset lists →
 `ALL_UPDATED` / `ANY_UPDATED` table triggers, `trigger_rule` → `run_if`, `params={...}` / `Param` →
 job parameters, and `>>` / `<<` / `set_upstream` / `set_downstream` / TaskGroup edges → task
-dependencies.
+dependencies. Interval macros (`{{ ds }}`, `{{ ts }}`, `{{ data_interval_start }}`, ...) are computed per run
+by a generated first task that reproduces Airflow's rendering: the previous schedule tick for an Airflow 2
+data-interval timetable, the fire time for an Airflow 3 raw cron, and the trigger time for a manual run.
 
 Operators without a deterministic mapping become a failing placeholder and are recorded in
 `gaps.json` for review. Eligible leaf gaps can use the fingerprint-bound resolver backed by the pinned [`airflow-to-dabs`](https://github.com/park-peter/airflow-to-dabs/tree/main/providers/flowx-gap-resolver) provider profile; flowx retains ownership of parsing, graph identity, policy, IR, and packaging. Full matrix:
@@ -236,7 +247,7 @@ Parses the source into typed nodes and classifies each activity/operator as dete
 Applies deterministic translators (ADF activity registry / Airflow operator mapping), resolves dependencies, and records unresolved gaps. ADF supports its guided agentic translation workflow. Airflow supports a fingerprint-bound, explicitly reviewed leaf-gap workflow whose constrained provider output is replayed against an immutable deterministic baseline before packaging. Produces the shared Pipeline IR consumed unchanged by the package phase.
 
 ### Phase 3: Package
-Converts Pipeline IR into a deployable DABs project: `databricks.yml`, per-job YAML resource files, generated Python notebooks, and setup scripts for UC volumes, secrets, and connections.
+Converts Pipeline IR into a deployable DABs project: `databricks.yml`, per-job YAML resource files, generated Python notebooks, and setup scripts for UC volumes, secrets, and connections. A multi-pipeline factory can be laid out into bundles with `--packaging-mode` (`per-pipeline` default / `single` / `per-group`); a top-level `DEPLOY.md` records the suggested callees-first deploy order, and `python -m flowx.adapter deploy` deploys the bundles in that order, wiring cross-bundle job ids automatically.
 
 ## Output Format
 

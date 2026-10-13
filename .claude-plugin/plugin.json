@@ -15,6 +15,7 @@
     "./skills/flowx-route",
     "./skills/flowx-convert",
     "./skills/flowx-package",
+    "./skills/flowx-deploy",
     "./skills/flowx-migrate"
   ]
 }
