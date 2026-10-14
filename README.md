@@ -96,6 +96,7 @@ Run the end-to-end migration:
 Or run individual phases:
 
 ```
+/flowx:flowx-extract-metadata  # (ADF) Get the factory's definitions: ADF Studio export, Git, or live Azure API
 /flowx:flowx-discover    # Parse the source (ADF JSON / Airflow DAGs), produce inventory + complexity report
 /flowx:flowx-convert     # Deterministic + agentic translation
 /flowx:flowx-package     # Generate DABs project

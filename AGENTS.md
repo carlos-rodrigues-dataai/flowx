@@ -63,6 +63,14 @@ intermediates under `.work/` (pruned by `package`).
    multi-pipeline factory is laid out into bundles; a top-level `DEPLOY.md` records the suggested
    callees-first deploy order for every mode.
 
+An optional **Extract** step (`python -m flowx.adapter extract --source adf`, ADF only) runs before
+Discover when the user has no export: it pulls one factory's definitions live from Azure Resource
+Manager (one paginated list call per resource type, throttling-aware retries) into the native layout
+plus `_manifest.json`, `--validate-path` checks any export/ARM template/Git clone and prints the exact
+path for discover, and `--emit-notebook` writes a notebook the user runs themselves. It needs the
+optional `extract` extra (`azure-identity`, `requests`). The `flowx-extract-metadata` skill drives it;
+the MCP tool has no `extract` command yet.
+
 ### Key Patterns
 - `@dataclass(slots=True, kw_only=True)` for all models
 - Immutable `TranslationContext` threaded through visitors
@@ -92,6 +100,7 @@ intermediates under `.work/` (pruned by `package`).
 | `reporting/coverage.py` | Builds per-pipeline coverage rows from `metadata/` |
 | `reporting/results.py` | Writes per-run coverage to a UC table (run_id/run_date/run_by) via the SDK |
 | `reporting/dashboard.py` | Installs + publishes an AI/BI coverage dashboard over the results table |
+| `sources/adf/extract/` | Live ADF extraction (`core.py`, self-contained and inlined into the generated notebook), export/path checks (`layout.py`), notebook rendering (`notebook.py`) |
 
 ## Activity Types
 

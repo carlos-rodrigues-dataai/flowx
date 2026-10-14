@@ -172,8 +172,11 @@ Ask the user for all required inputs upfront:
 
 Example prompt:
 
+If the user has no ADF export yet, run the `flowx-extract-metadata` skill first and use the
+`discover_path` it returns as the ADF source path.
+
 > To migrate your ADF pipelines, I need:
-> 1. Where are your ADF JSON exports? (UC volume path like `/Volumes/main/default/adf_export` or local directory)
+> 1. Where are your ADF JSON exports? (UC volume path like `/Volumes/main/default/adf_export` or local directory — or I can help you get them)
 > 2. Where should I write the output? (default: `./flowx_output/`)
 > 3. What target catalog and schema? (default: `main.default`)
 
