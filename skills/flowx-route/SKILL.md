@@ -118,6 +118,36 @@ achieve, the databases behind the extractors, whether they are after a specific 
 Lakeflow Connect — and record each question and answer in the plan's `conversation`
 (`[{"question": "...", "answer": "..."}]`). Package copies it into `route_audit.json`.
 
+### SQL Server sources: ask before suggesting an ingestion pattern
+
+When the factory reads from SQL Server, ask these before you suggest a Lakeflow Connect ingestion
+pattern, and record each question and answer in the plan's `conversation`. Enrich flags such pipelines
+in their `conversion_notes`. In `inventory.json`, an activity's `raw` JSON shows it: a source type of
+`SqlServerSource`, `AzureSqlSource` or `SqlMISource` (`typeProperties.source.type` on Copy and Lookup
+activities). The linked service types `SqlServer`, `AzureSqlDatabase` and `AzureSqlMI` are a second
+signal, only when the source export itself is at hand.
+
+1. **Gateway or integrated CDC, and is integrated CDC enabled on their workspace?**
+   - **Gateway-based:** an ingestion gateway runs continuously on classic compute and stages changes,
+     and a separate ingestion pipeline (serverless) applies them. The pipeline references the gateway
+     by `ingestion_gateway_id`.
+   - **Integrated CDC:** one pipeline extracts and applies on each update. It references a Unity Catalog
+     connection by `connection_name` with `connector_type: CDC`. The Databricks account team has to
+     enable it on the workspace, and it is created through the API, the CLI or a bundle, not the UI.
+
+   If they don't know whether integrated CDC is enabled, say what each option needs and let them choose.
+   Don't assume it is enabled.
+2. **Classic or serverless compute?** The gateway runs on classic compute only. Integrated CDC runs on
+   classic compute by default, and on serverless once serverless network connectivity to the database
+   is set up.
+3. **Roughly how many tables?** This decides how many ingestion pipelines the fill authors: each
+   pipeline has a table limit, so check the current limit in the connector docs and split larger sets
+   across pipelines.
+
+Before suggesting either pattern, check its current release state and availability against the public
+Databricks docs, as `flowx-enrich` requires, and tell the customer plainly what you found. Don't rely
+on a remembered state. The fill (Step 3) builds the ingestion from these recorded answers.
+
 ### Suggested groupings
 
 A **grouping** is two or more whole components the insights suggest converting together, agentically,
@@ -214,6 +244,10 @@ pipelines you author (no LLM in the library, which validates and records).
 
 MCP: `flowx(command="fill_agentic", parameters={"output_dir": ..., "members": [...], "pipelines": [...]})`
 (pass `pipelines` inline as a list, or `pipelines_path`).
+
+For SQL Server sources, author the ingestion from the answers recorded in the plan's `conversation`
+(gateway or integrated CDC, the compute, and the table count), and don't pick a pattern the customer
+didn't choose.
 
 To keep a pipeline 1:1, fill its component with one authored pipeline of the **same name**. The
 per-pipeline `convert --merge-agentic` is for convert's **own** agentic gaps only: it refuses, writing

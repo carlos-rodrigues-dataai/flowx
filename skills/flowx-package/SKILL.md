@@ -93,14 +93,19 @@ Ask the user for the following (provide defaults):
 
 | Parameter | Description | Default |
 |---|---|---|
-| Target catalog | Unity Catalog catalog for tables/volumes | `main` |
-| Target schema | Schema within the catalog | `default` |
+| Target catalog and schema | Unity Catalog catalog and schema for tables/volumes, asked as one answer `catalog.schema` | `main.default` |
 | Output directory | Shared migration dir; bundle + `metadata/` are written here | `./flowx_output` |
 | Bundle name | Name for the DABs project | derived from first pipeline name |
 | Target environments | Deployment targets to configure | `dev, staging, prod` |
 | Warehouse ID | SQL warehouse for SQL tasks (optional) | prompt if SQL tasks exist |
 | Packaging mode | How to lay out bundles for a multi-pipeline factory (`--packaging-mode`): `per-pipeline`, `single`, or `per-group`. See below. | `per-pipeline` |
 | Databricks CLI profile | Profile used to download workspace-resident notebooks / JARs / Python files (`--profile`). Required only when the bundle references absolute workspace paths. | resolved from `~/.databrickscfg` (auto-prompt if multiple) |
+
+Ask for the catalog and schema as **one free-text question**: "Which catalog and schema should the
+bundle target, as `catalog.schema`? (default `main.default`)". Split the answer at the dot between the
+two names, stripping any backticks around either name, and pass them as `--catalog` and `--schema`.
+Never offer a "Custom" choice that can't take text: if you use a picker, the only way to type a value
+must be its free-text answer.
 
 **Packaging mode** (`--packaging-mode`, surfaced as the `packaging_mode` input) controls how a
 multi-pipeline migration is laid out. For a single-pipeline migration every mode is equivalent.
@@ -362,7 +367,7 @@ All under the shared `<output_dir>`:
 | File | Description |
 |---|---|
 | `databricks.yml` | Root bundle configuration |
-| `resources/*.yml` | Job and pipeline YAML definitions |
+| `resources/*.yml` | Job and pipeline YAML definitions; each package clears the folder first, so a resource an earlier package wrote doesn't linger |
 | `src/notebooks/*.py` | Generated notebooks |
 | `src/setup/*.py` | Infrastructure setup scripts |
 | `SETUP.md` | Human-readable setup instructions (one per bundle) |

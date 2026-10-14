@@ -548,3 +548,29 @@ def test_package_refuses_a_configured_report_of_an_unfilled_agentic_component(
 
     assert "is routed agentic but has no agent output yet" in capsys.readouterr().err
     assert not (tmp_path / "databricks.yml").exists()
+
+
+def test_re_packaging_after_reversing_an_agentic_decision_drops_the_agentic_resources(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A unit packaged agentic, then routed deterministic and packaged again, ships only the deterministic job."""
+    _setup(tmp_path, _inventory("agentic"))
+    plan_path = tmp_path / "plan.json"
+
+    def _route(decision: str) -> int:
+        plan = {"components": [{"component_id": "component-1", "members": ["solo"], "decision": decision}]}
+        plan_path.write_text(json.dumps(plan), encoding="utf-8")
+        return adapter_main(["route", "--output-dir", str(tmp_path), "--plan-path", str(plan_path)])
+
+    assert _route("agentic") == 0
+    _fill_solo(tmp_path)
+    assert _package(tmp_path) == 0
+    assert sorted(path.name for path in (tmp_path / "resources").glob("*.yml")) == ["solo_agentic.yml"]
+
+    assert _route("deterministic") == 0
+    assert _package(tmp_path) == 0
+    capsys.readouterr()
+
+    assert sorted(path.name for path in (tmp_path / "resources").glob("*.yml")) == ["solo.yml"]
+    audit = json.loads((tmp_path / "metadata" / "route_audit.json").read_text(encoding="utf-8"))
+    assert audit["components"][0]["outcome"] == "deterministic"

@@ -492,6 +492,10 @@ def write_bundle_group(
     manual_parameters: list[ManualParameter] = []
     resources_dir = output_dir / "resources"
     resources_dir.mkdir(parents=True, exist_ok=True)
+    # databricks.yml includes every resources/*.yml, so a resource an earlier package wrote (say, an
+    # agentic unit the user has since routed deterministic) would still deploy unless it is cleared.
+    for stale_resource_path in resources_dir.glob("*.yml"):
+        stale_resource_path.unlink()
     for index, workflow in enumerate(workflows):
         resource_key = to_lowercase_key(workflow.name)
         # Each job resource (parent + its inner ForEach jobs) gets only this workflow's hoisted globals,
