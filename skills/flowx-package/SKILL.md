@@ -341,7 +341,7 @@ All under the shared `<output_dir>`:
 | File | Description |
 |---|---|
 | `databricks.yml` | Root bundle configuration |
-| `resources/*.yml` | Job and pipeline YAML definitions |
+| `resources/*.yml` | Job and pipeline YAML definitions; each package clears the folder first, so a resource an earlier package wrote doesn't linger |
 | `src/notebooks/*.py` | Generated notebooks |
 | `src/setup/*.py` | Infrastructure setup scripts |
 | `SETUP.md` | Human-readable setup instructions |
