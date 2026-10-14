@@ -122,8 +122,10 @@ Lakeflow Connect — and record each question and answer in the plan's `conversa
 
 When the factory reads from SQL Server, ask these before you suggest a Lakeflow Connect ingestion
 pattern, and record each question and answer in the plan's `conversation`. Enrich flags such pipelines
-in their `conversion_notes`; the ADF linked service types are `SqlServer`, `AzureSqlDatabase` and
-`AzureSqlMI`.
+in their `conversion_notes`. In `inventory.json`, an activity's `raw` JSON shows it: a source type of
+`SqlServerSource`, `AzureSqlSource` or `SqlMISource` (`typeProperties.source.type` on Copy and Lookup
+activities). The linked service types `SqlServer`, `AzureSqlDatabase` and `AzureSqlMI` are a second
+signal, only when the source export itself is at hand.
 
 1. **Gateway or integrated CDC, and is integrated CDC enabled on their workspace?**
    - **Gateway-based:** an ingestion gateway runs continuously on classic compute and stages changes,

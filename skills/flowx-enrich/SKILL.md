@@ -101,8 +101,11 @@ narrative.
    and it does not relax the rule above: you still **verify the release state against the current public
    Databricks docs before recommending** (never "recommend now, verify later").
 
-   **Flag SQL Server sources.** When a pipeline reads from SQL Server (ADF linked service types
-   `SqlServer`, `AzureSqlDatabase` or `AzureSqlMI`), add a `conversion_notes` entry saying so, so that
+   **Flag SQL Server sources.** A pipeline reads from SQL Server when an activity's `raw` JSON in
+   `inventory.json` has a source type of `SqlServerSource`, `AzureSqlSource` or `SqlMISource`
+   (`typeProperties.source.type` on Copy and Lookup activities). The linked service types `SqlServer`,
+   `AzureSqlDatabase` and `AzureSqlMI` are a second signal, only when the source export itself is at
+   hand. For such a pipeline, add a `conversion_notes` entry saying so, so that
    `flowx-route` asks the customer its SQL Server ingestion questions (gateway or integrated CDC, the
    compute, roughly how many tables) before a pattern is suggested.
 3. **Author the insights JSON, then call `enrich`.** The library validates it against the inventory
