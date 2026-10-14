@@ -187,6 +187,10 @@ def write_bundle(
 
     resources_dir = output_dir / "resources"
     resources_dir.mkdir(parents=True, exist_ok=True)
+    # databricks.yml includes every resources/*.yml, so a resource an earlier package wrote (say, an
+    # agentic unit the user has since routed deterministic) would still deploy unless it is cleared.
+    for stale_resource_path in resources_dir.glob("*.yml"):
+        stale_resource_path.unlink()
     job_yml_path = resources_dir / f"{resource_key}.yml"
     hoisted_global_names = set(hoisted_global_variables)
     job_resource = _build_job_resource(
