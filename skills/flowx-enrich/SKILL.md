@@ -100,6 +100,11 @@ narrative.
    unilaterally refuse to suggest it (there is no `doNotSuggest` gate). This is disclosure, not a gate —
    and it does not relax the rule above: you still **verify the release state against the current public
    Databricks docs before recommending** (never "recommend now, verify later").
+
+   **Flag SQL Server sources.** When a pipeline reads from SQL Server (ADF linked service types
+   `SqlServer`, `AzureSqlDatabase` or `AzureSqlMI`), add a `conversion_notes` entry saying so, so that
+   `flowx-route` asks the customer its SQL Server ingestion questions (gateway or integrated CDC, the
+   compute, roughly how many tables) before a pattern is suggested.
 3. **Author the insights JSON, then call `enrich`.** The library validates it against the inventory
    and the saved source graphs and, only when clean, writes `agentic_insights.json` and rebuilds the
    inventory. On any violation both files are left untouched and you get the full list of

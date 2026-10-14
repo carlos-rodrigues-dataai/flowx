@@ -82,13 +82,15 @@ replace it with one `migrate` call: `migrate` is server code, which can't author
 the user for the routing decisions, so it runs only discover → convert → package and never enriches
 or routes. Convert reads the source again, so pass the **same source key to `discover` and
 `convert`**. With inline `adf_definitions` that means sending the payload twice; a volume or workspace
-path (below) sends only the path. Every other command reuses `output_dir`. `source` ("adf" |
-"airflow") is required for discover/convert and for `inputs discover`/`inputs convert`; for Airflow,
-swap `adf_definitions` for `airflow_source_path` and skip route and fill (ADF only today).
-`merge_agentic` is ADF-only. `package` and `inputs package` are source-independent:
+path (below) sends only the path. Every other command reuses `output_dir`. Ask each phase's inputs
+when that phase runs, as Steps 0 and 1 below describe: call `inputs` for a phase just before it, not
+for every phase at the start. `source` ("adf" | "airflow") is required for discover/convert and for
+`inputs discover`/`inputs convert`; for Airflow, swap `adf_definitions` for `airflow_source_path`.
+On non-ADF sources route records deterministic decisions only; agentic decisions and `fill_agentic`
+are ADF-only. `merge_agentic` is ADF-only. `package` and `inputs package` are source-independent:
 
 ```
-flowx(command="inputs", parameters={"phase": "discover", "source": "adf"})  # source req for discover/convert
+flowx(command="inputs", parameters={"phase": "discover", "source": "adf"})  # just before discover; source req for discover/convert
 flowx(command="discover", parameters={"source": "adf", "adf_definitions": {...}, "output_dir": ..., "pipeline": ...})
 flowx(command="enrich", parameters={"output_dir": ..., "action": "prepare"})  # returns inventory.json to author against
 flowx(command="enrich", parameters={"output_dir": ..., "insights": {...}})  # default: author + record the insights layer (see flowx-enrich)
@@ -178,40 +180,45 @@ it and stop until they have Python 3.12+ and pip.
 
 Follow these steps in order:
 
-### Step 0 — Gather phase inputs via the adapter
+### Step 0 — Ask each phase's inputs when that phase runs
 
-Before invoking discover, run the adapter inputs subcommand once per
-phase so the agent surfaces the matching free-text prompts:
+The adapter's `inputs` subcommand lists a phase's prompts with their descriptions and defaults. Run it
+for a phase **just before that phase**, not for every phase at the start, so each question comes when
+the user can answer it:
 
 ```bash
-"$PY" -m flowx.adapter inputs discover --source adf   # or --source airflow
-"$PY" -m flowx.adapter inputs convert --source adf     # or --source airflow
-"$PY" -m flowx.adapter inputs package                  # source-independent
+"$PY" -m flowx.adapter inputs discover --source adf   # before discover (Step 2); or --source airflow
+"$PY" -m flowx.adapter inputs convert --source adf     # before convert (Step 5)
+"$PY" -m flowx.adapter inputs package                  # before package (Step 12); source-independent
 ```
 
-Each response carries the options for that phase plus their descriptions and
-defaults.  Collect answers from the user (or accept the defaults) and thread the
-values into the downstream CLI calls. All phases share **one** migration
-`<output_dir>` (default `./flowx_output`).
+Ask only the prompts the user hasn't already answered, accept the defaults for the rest, and thread the
+values into that phase's CLI call. All phases share **one** migration `<output_dir>` (default
+`./flowx_output`).
 
-### Step 1 — Gather inputs
+### Step 1 — Ask the starting inputs
 
-Ask the user for all required inputs upfront:
+At the start, ask for **only** these three:
 
-| Parameter | Description | Required | Default |
+| Input | Description | Required | Default |
 |---|---|---|---|
-| ADF source path | UC volume path or local directory with ADF JSON files | Yes | — |
+| Source path | ADF: UC volume path or local directory with ADF JSON files (Airflow: a DAG `.py` file or directory) | Yes | — |
 | Output directory | Single shared root for all flowx output (bundle + `metadata/`) | No | `./flowx_output` |
-| Target catalog | Unity Catalog catalog for tables/volumes | No | `main` |
-| Target schema | Schema within the catalog | No | `default` |
-| Bundle name | Name for the generated DABs project | No | derived from pipelines |
+| Flow | The full flow (enrich and a routing review), or a deterministic-only pass | No | full flow |
 
 Example prompt:
 
 > To migrate your ADF pipelines, I need:
 > 1. Where are your ADF JSON exports? (UC volume path like `/Volumes/main/default/adf_export` or local directory)
 > 2. Where should I write the output? (default: `./flowx_output/`)
-> 3. What target catalog and schema? (default: `main.default`)
+> 3. The full flow (enrich and a routing review), or a deterministic-only pass? (default: the full flow)
+
+Ask nothing else yet. The other inputs make sense only once the user has seen what discover found, so
+ask each at its step:
+
+- **Convert options** (for ADF, how factory global parameters are resolved) at convert, Step 5.
+- **Catalog and schema, the bundle name, and any other option `inputs package` lists** at package,
+  Step 12.
 
 ### Step 2 — Phase 1: Discover
 
@@ -265,7 +272,9 @@ by default.
 
 Convert the source's tasks to Databricks IR, producing the **deterministic baseline** report
 `<output_dir>/.work/translation_report.json`. This runs **before** routing, because routing (Step 7)
-reads and edits this report. Invoke the `flowx:flowx-convert` skill with:
+reads and edits this report. Just before it, run `inputs convert` and ask the convert options the user
+hasn't answered; for ADF that is how factory global parameters are resolved
+(`--global-parameter-resolution`, default `literal`). Then invoke the `flowx:flowx-convert` skill with:
 - `--source <source>`: the same source discover used
 - Source path: the original source path (same one discover used)
 - Output dir: the same shared `<output_dir>` (convert writes its report to `<output_dir>/.work/`)
@@ -300,11 +309,11 @@ For failures, suggest:
 
 ### Step 7 — Route the conversion (deterministic vs. agentic)
 
-**ADF only today.** Routing (and the agentic fill in Step 8) applies to **ADF**. For **Airflow**, skip
-Steps 7–8 and take the deterministic report straight to configuration/package; resolve any Airflow
-agentic gaps with the **`flowx-resolve-airflow-gaps`** skill instead. `route` refuses an agentic
-decision for an Airflow inventory; Airflow agentic conversion follows the Airflow track's own per-gap
-contract.
+**Agentic decisions are ADF only today.** On non-ADF sources (Airflow today) route records
+deterministic decisions only and refuses an agentic one, and the agentic fill in Step 8 is ADF-only.
+So for **Airflow** Steps 7–8 add nothing: take the deterministic report straight to configuration and
+package, and resolve any Airflow agentic gaps with the **`flowx-resolve-airflow-gaps`** skill instead,
+which follows the Airflow track's own per-gap contract.
 
 Routing reads the deterministic baseline report `.work/translation_report.json` (built in Step 5) and
 edits it. Invoke the **`flowx:flowx-route`** skill: route first writes its per-component
@@ -448,11 +457,20 @@ Skip this step entirely when `needs_auth` is `false`.
 
 ### Step 12 — Phase 3: Package
 
-Invoke the `flowx:flowx-package` skill with:
+Now that the user has seen the inventory, run `inputs package` and ask its options the user hasn't
+answered: the target catalog and schema, the bundle name, and any other option it lists.
+
+Ask for the catalog and schema as **one free-text question**: "Which catalog and schema should the
+bundle target, as `catalog.schema`? (default `main.default`)". Split the answer at the dot between the
+two names, stripping any backticks around either name, and pass them as `--catalog` and `--schema`.
+Never offer a "Custom" choice that can't take text: if you use a picker, the only way to type a value
+must be its free-text answer, so a pick always carries the names.
+
+Then invoke the `flowx:flowx-package` skill with:
 - Output dir: the same shared `<output_dir>` — package reads the stamped report from
   `<output_dir>/.work/` automatically (no report path needed) and writes the bundle here
-- Catalog: user-specified or `main`
-- Schema: user-specified or `default`
+- Catalog: the first name from that answer, or `main`
+- Schema: the second name from that answer, or `default`
 
 Package prunes the transient `<output_dir>/.work/` after a successful build, leaving the
 bundle (databricks.yml, resources/, src/, SETUP.md) plus the kept `metadata/` folder.
