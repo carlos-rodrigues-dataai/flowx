@@ -263,10 +263,9 @@ LLM — you author the insights JSON and `enrich` validates + merges it additive
 deterministic inventory key byte-identical. The routing step consumes this block to present the
 agentic conversion option per group.
 
-**Skip only for a deterministic-only pass.** When the user explicitly asked for a headless,
-deterministic-only migration (no agent/LLM authoring), skip enrich — the deterministic
-`inventory.json` is complete and `flowx-route` still works from the structure alone. Otherwise enrich
-by default.
+**Skip only for a deterministic-only pass.** When the user chose a deterministic-only pass in Step 1
+(no agent/LLM authoring), skip enrich and the routing review (Steps 7–8) — the deterministic
+`inventory.json` is complete. Otherwise enrich by default.
 
 ### Step 5 — Phase 2: Convert (deterministic baseline)
 
@@ -314,6 +313,10 @@ deterministic decisions only and refuses an agentic one, and the agentic fill in
 So for **Airflow** Steps 7–8 add nothing: take the deterministic report straight to configuration and
 package, and resolve any Airflow agentic gaps with the **`flowx-resolve-airflow-gaps`** skill instead,
 which follows the Airflow track's own per-gap contract.
+
+**Skip Steps 7–8 for a deterministic-only pass.** When the user chose a deterministic-only pass in
+Step 1, run no route and no fill: with no recorded plan, convert and package behave exactly as before
+and everything converts deterministically. Go straight to configuration and package.
 
 Routing reads the deterministic baseline report `.work/translation_report.json` (built in Step 5) and
 edits it. Invoke the **`flowx:flowx-route`** skill: route first writes its per-component
