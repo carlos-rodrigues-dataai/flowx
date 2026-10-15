@@ -383,7 +383,7 @@ def test_failed_overwrite_keeps_the_previous_export(tmp_path, monkeypatch):
     real_move = core._move_tree
 
     def fail_when_installing(source: Path, target: Path) -> None:
-        if target == output and not source.name.endswith(".previous"):
+        if target == output and ".previous-" not in source.name:
             raise OSError("volume unavailable")
         real_move(source, target)
 
@@ -393,6 +393,16 @@ def test_failed_overwrite_keeps_the_previous_export(tmp_path, monkeypatch):
     monkeypatch.undo()
     assert (output / core.MANIFEST_NAME).read_text() == previous_manifest
     assert sorted(path.name for path in tmp_path.iterdir()) == ["export"]
+
+
+def test_overwrite_keeps_folders_flowx_did_not_create(tmp_path):
+    output, _ = _write_sample(tmp_path)
+    unrelated = tmp_path / ".export.previous"
+    unrelated.mkdir()
+    (unrelated / "notes.txt").write_text("keep me")
+    _write_sample(tmp_path, overwrite=True)
+    assert (unrelated / "notes.txt").read_text() == "keep me"
+    assert sorted(path.name for path in tmp_path.iterdir()) == [".export.previous", "export"]
 
 
 # --------------------------------------------------------------------------------------

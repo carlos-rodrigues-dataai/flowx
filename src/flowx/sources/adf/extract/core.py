@@ -22,6 +22,7 @@ import re
 import shutil
 import tempfile
 import time
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -560,8 +561,8 @@ def _move_into_place(staging: Path, destination: Path) -> None:
     """Swaps the finished staging tree into ``destination``, keeping any old export until it succeeds."""
     previous: Path | None = None
     if destination.exists():
-        previous = destination.with_name(f".{destination.name}.previous")
-        shutil.rmtree(previous, ignore_errors=True)
+        # A unique name, so a folder flowx didn't create is never deleted.
+        previous = destination.with_name(f".{destination.name}.previous-{uuid.uuid4().hex[:8]}")
         _move_tree(destination, previous)
     try:
         _move_tree(staging, destination)
