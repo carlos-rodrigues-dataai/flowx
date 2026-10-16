@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import random
 import re
@@ -39,6 +40,8 @@ _REQUEST_TIMEOUT_SECONDS = 60
 _TOKEN_REFRESH_MARGIN_SECONDS = 300
 _RETRYABLE_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
 _MAX_BACKOFF_SECONDS = 60.0
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -119,6 +122,7 @@ AUTH_HINT = (
 )
 
 AUTH_MODES = ("default", "device-code", "service-credential")
+# Same pins as the `azure` extra; named directly because this module also runs inlined in a notebook.
 _INSTALL_HINT = "Install them with: pip install 'azure-identity>=1.17' 'requests>=2.31'"
 
 
@@ -572,7 +576,10 @@ def _move_into_place(staging: Path, destination: Path) -> None:
             _move_tree(previous, destination)
         raise
     if previous is not None:
-        shutil.rmtree(previous, ignore_errors=True)
+        try:
+            shutil.rmtree(previous)
+        except OSError:
+            logger.warning("Couldn't remove export backup at %s", previous)
 
 
 def _move_tree(source: Path, target: Path) -> None:

@@ -16,11 +16,11 @@ triggers:
   - "flowx extract"
 ---
 
-# Get the Source Pipeline Definitions
+# Extract the source pipeline definitions
 
-Before `flowx-discover` can run, flowx needs a copy of the definitions it migrates. This skill
-helps the user get one in the way that suits them, checks it, and hands the exact path to
-discover. Nothing in the source system is changed.
+Before `flowx-discover` can run, flowx needs a copy of the pipeline definitions for any pipelines
+the user wants to migrate. This skill helps the user export pipeline definitions in the way that 
+suits them, checks it, and hands the exact path to discover. Nothing in the source system is changed.
 
 For a Git repository or an ADF Studio download, the skill only **guides**: the user takes the steps
 and comes back with a path. Only the Azure API option is run by the assistant (or by the user, from
@@ -28,13 +28,19 @@ a generated notebook).
 
 ## Step 1 — Identify the source
 
-- **Azure Data Factory / Fabric Data Factory exported as ADF JSON** → read `sources/adf.md` and follow it.
-- **Apache Airflow** → there is nothing to extract: the DAGs are already Python files. Ask for the
-  DAG folder (local path, Git clone or `/Workspace` folder) and go straight to `flowx-discover`.
+### Azure Data Factory / Synapse / Fabric Data Factory
 
-Skip this skill if the user already has an ADF export, ARM template or Git clone; still run the
-path check in `sources/adf.md` (Step 5) before discover, because a wrong path silently yields an
-empty inventory.
+Azure Data Factory, Synapse, and Fabric Data Factory pipelines are represented as ADF ARM JSON. Verify
+that the user does not have an ADF export, ARM template, or Git clone. Then read and follow all relevant
+steps in `sources/adf.md`.
+
+Skip steps 1 and 2 if the user already has an ADF export, ARM template, or Git clone. Start with the path
+check in step 3 before running `flowx-discover`, because a wrong path silently yields an empty inventory.
+
+### Apache Airflow
+
+Airflow uses DAGs represented in Python files. Ask for the DAG folder (local path, Git clone or `/Workspace`
+folder) and skip straight to `flowx-discover`.
 
 ## How it runs
 
@@ -46,14 +52,14 @@ PY="$(cat <plugin_dir>/.migration-venv)"
 "$PY" -m flowx.adapter extract --source adf ...
 ```
 
-The plugin venv from `flowx-setup` doesn't include the Azure sign-in package. Install it once, the
-same way `flowx-setup` adds the optional MCP packages:
+The plugin venv from `flowx-setup` doesn't include the Azure sign-in package. Install flowx's
+`azure` extra into it once:
 
 ```bash
-"$PY" -m pip install 'azure-identity>=1.17'
+"$PY" -m pip install -e '<plugin_dir>[azure]'
 ```
 
-Developers working on the flowx repository use `uv sync --extra extract` instead.
+Developers working on the flowx repository use `uv sync --extra azure` instead.
 
 The extraction signs in as the user (`az login`, or a device code in a Databricks notebook).
 Identities that need no sign-in (a service principal, or a Unity Catalog service credential) need

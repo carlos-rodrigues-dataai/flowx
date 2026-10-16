@@ -34,9 +34,9 @@ mcp = [
     "uvicorn>=0.30",
     "starlette>=0.40",
 ]
-# Install with `pip install -e .[extract]` to pull ADF definitions live from Azure
+# Install with `pip install -e .[azure]` to pull ADF definitions live from Azure
 # (`flowx extract --source adf`). Optional so the other phases never need the Azure stack.
-extract = [
+azure = [
     "azure-identity>=1.17",
     "requests>=2.31",
 ]
@@ -73,7 +73,7 @@ exclude = ['venv', '.venv', 'tests/*']
 module = ["mcp.*", "starlette.*", "uvicorn.*"]
 ignore_missing_imports = true
 
-# Optional `extract` extra (only installed for `flowx extract`).
+# Optional `azure` extra (only installed for `flowx extract`).
 [[tool.mypy.overrides]]
 module = ["azure.*", "requests.*"]
 ignore_missing_imports = true

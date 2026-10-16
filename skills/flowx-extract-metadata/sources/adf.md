@@ -2,7 +2,7 @@
 
 Source guide for `--source adf`. See the parent `SKILL.md` for how the phase runs and the MCP note.
 
-## Step 1 — Ask which option the user prefers
+## Step 1 — Ask the user how to export
 
 Ask in plain language, and keep it short. Suggested wording:
 
@@ -42,7 +42,7 @@ When the user picks one, explain what it needs before starting, using the table 
 | **You'll need** | The repo, its branches and the factory's *root folder* (ADF Studio > Manage > Source control > Git configuration). In Databricks, a Git credential for that provider. | A browser with ADF Studio | Tenant ID, subscription ID, resource group and factory name (ADF Studio > Manage > Properties); network access to `management.azure.com`. Device-code sign-in may be blocked by company policy (see Step 4). |
 | **Gets you** | The latest commit on the collaboration branch, a release tag, or the published template — the user confirms which | The factory as it is now in ADF Studio | The factory exactly as it is now |
 
-## Options 1 and 2 are done by the user
+### Options 1 and 2 are done by the user
 
 For the Git repository and the ADF Studio download, **you guide and the user acts**. Explain the
 steps, answer questions, then wait for the user to come back with a path. Don't clone repositories,
@@ -50,7 +50,9 @@ create or switch Git folders, check out branches or tags, add Git credentials, o
 download files yourself — even if your tools would let you. Your part starts again at Step 5, which
 only reads the path they give you.
 
-## Step 2 — Option 1: the Git repository
+## Step 2 — Export the pipelines
+
+### Option 1: Use a Git repository
 
 The usual setup is **one factory per repository**: the factory is connected to one repo, everyone
 works in feature branches that merge into a single *collaboration branch*, and publishing writes to
@@ -104,7 +106,7 @@ from step 3 on their machine, or the branch or tag and commit shown in the Git f
 the folder path and go to Step 5. The check finds the root folder, or the template in the publish
 branch.
 
-## Step 3 — Option 2: download from ADF Studio
+### Option 2: Download from ADF Studio
 
 Give the user these steps:
 
@@ -124,7 +126,7 @@ The Azure portal's generic **Export template** does **not** work for Data Factor
 When they're back, go to Step 5 with that path. The check points discover at
 `ARMTemplateForFactory.json` — never the folder itself, which would load no pipelines.
 
-## Step 4 — Option 3: the Azure API
+### Option 3: Use the Azure REST API
 
 Collect the four coordinates (tenant, subscription, resource group, factory name). The user signs in
 with **their own Azure account**, so they need **Reader** on the factory and nothing else is set up:
@@ -151,9 +153,9 @@ Then ask who should run it, and recommend based on where you are:
 | **3b. One MCP tool call** | — | **Not available yet.** Tell the user the flowx MCP tool can't run the extraction yet and offer 3a or 3c. |
 | **3c. You run a notebook** | Genie Code; the user wants to run it in their own workspace; the agent can't reach Azure; a customer runs it for you | Device code (the notebook's default) |
 
-### 3a — The assistant runs it
+#### Option 3a — The assistant runs the calls
 
-1. Install the Azure sign-in package into the plugin venv (see `SKILL.md`).
+1. Install flowx's `azure` extra into the plugin venv (see `SKILL.md`).
 2. Ask the user to run `az login --tenant <tenant-id>` (add `--use-device-code` on a remote machine
    without a browser). In Claude Code, suggest they type `! az login --tenant <tenant-id>` so it runs
    in this session.
@@ -174,7 +176,7 @@ Then ask who should run it, and recommend based on where you are:
    1 means it failed or isn't usable (the output says why); 2 means a sign-in, permission or setup
    problem, such as missing packages.
 
-### 3c — The user runs a notebook
+#### Option 3c — The user runs a notebook
 
 1. Generate the notebook, pre-filled with what you know (never secrets):
 
@@ -196,7 +198,7 @@ Then ask who should run it, and recommend based on where you are:
 4. When they're back, go to Step 5 with that path. If you run locally and the export is in their
    workspace, download it first: `databricks workspace export-dir <workspace_path> <local_dir> --profile <profile>`.
 
-### When the user's own sign-in doesn't work
+### When the user's sign-in doesn't work
 
 Use this only if device code or `az login` is blocked, the user has no Reader access and can't get
 it, or the user asks for a sign-in with no interaction (for example to run the extraction on a
@@ -256,7 +258,7 @@ Then:
         "--auth", "service-credential", "--service-credential", "<credential-name>"])
   ```
 
-## Step 5 — Check the result (all options)
+## Step 3 — Check the result (all options)
 
 ```bash
 "$PY" -m flowx.adapter extract --source adf --validate-path <path> --json
@@ -274,7 +276,7 @@ Act on the warnings:
 - **Incomplete extraction / count mismatch** — say which resource types are missing and why
   (usually a missing role); offer to re-run after it's fixed.
 
-## Step 6 — Hand off to discover
+## Step 4 — Hand off to discover
 
 Show a short summary — factory name, pipelines, datasets, linked services, triggers — and the
 `discover_path`. Then continue with `flowx-discover` (or the next step of `flowx-migrate`), passing

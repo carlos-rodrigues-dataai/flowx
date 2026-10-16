@@ -68,7 +68,7 @@ Discover when the user has no export: it pulls one factory's definitions live fr
 Manager (one paginated list call per resource type, throttling-aware retries) into the native layout
 plus `_manifest.json`, `--validate-path` checks any export/ARM template/Git clone and prints the exact
 path for discover, and `--emit-notebook` writes a notebook the user runs themselves. It needs the
-optional `extract` extra (`azure-identity`, `requests`). The `flowx-extract-metadata` skill drives it;
+optional `azure` extra (`azure-identity`, `requests`). The `flowx-extract-metadata` skill drives it;
 the MCP tool has no `extract` command yet.
 
 ### Key Patterns

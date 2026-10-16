@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import json
+import logging
 import sys
 import types
 from pathlib import Path
@@ -403,6 +404,24 @@ def test_overwrite_keeps_folders_flowx_did_not_create(tmp_path):
     _write_sample(tmp_path, overwrite=True)
     assert (unrelated / "notes.txt").read_text() == "keep me"
     assert sorted(path.name for path in tmp_path.iterdir()) == [".export.previous", "export"]
+
+
+def test_overwrite_warns_when_the_backup_cannot_be_removed(tmp_path, monkeypatch, caplog):
+    _write_sample(tmp_path)
+    real_rmtree = core.shutil.rmtree
+
+    def locked_backup(path, ignore_errors=False):
+        if ".previous-" not in Path(path).name:
+            return real_rmtree(path, ignore_errors=ignore_errors)
+        if not ignore_errors:
+            raise OSError("backup is locked")
+
+    monkeypatch.setattr(core.shutil, "rmtree", locked_backup)
+    with caplog.at_level(logging.WARNING, logger=core.logger.name):
+        output, manifest = _write_sample(tmp_path, overwrite=True)
+    assert json.loads((output / core.MANIFEST_NAME).read_text()) == manifest
+    (backup,) = tmp_path.glob(".export.previous-*")
+    assert any(f"Couldn't remove export backup at {backup}" in rec.getMessage() for rec in caplog.records)
 
 
 # --------------------------------------------------------------------------------------
